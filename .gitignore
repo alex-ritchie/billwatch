@@ -1,0 +1,24 @@
+# Secrets & local credentials — never committed (design §8)
+.env
+.env.*
+!.env.example
+
+# Local scratch output from dry-run / test-email (may contain real addresses)
+out/
+dry-run/
+*.eml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+
+# SQLite journals (the DB itself IS committed by the workflow)
+state/*.db-journal
+state/*.db-wal
+state/*.db-shm

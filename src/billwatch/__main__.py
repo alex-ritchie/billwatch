@@ -1,0 +1,303 @@
+"""billwatch CLI: run | dry-run | backfill | test-email.
+
+Exit codes: 0 ok, 1 usage/config error, 2 fetch or delivery failure (so GitHub
+Actions marks the run failed and emails you — free failure alerting).
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sqlite3
+import sys
+from collections.abc import Sequence
+from datetime import date
+from pathlib import Path
+
+from . import __version__
+from .config import Config, ConfigError, FeedConfig, Settings, load_config, load_dotenv
+from .digest import Digest, NewBillItem, build_email, render_html, render_text
+from .legiscan import BillSource, FixtureClient, LegiScanClient, LegiScanError
+from .mailer import FileMailer, Mailer, MailError, make_mailer
+from .models import Action, Bill, Hearing
+from .pipeline import RunResult, run_pipeline
+from .store import Store
+
+log = logging.getLogger("billwatch")
+
+DEFAULT_CONFIG = "config/feeds.toml"
+DEFAULT_DB = "state/billwatch.db"
+
+EXIT_OK, EXIT_USAGE, EXIT_FAILED = 0, 1, 2
+
+
+def _parse_date(s: str) -> date:
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a YYYY-MM-DD date: {s!r}") from None
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="billwatch", description=__doc__.split("\n")[0])
+    p.add_argument("--version", action="version", version=f"billwatch {__version__}")
+    p.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+    p.add_argument(
+        "--env-file",
+        default=".env",
+        help="load KEY=VALUE pairs from this file if it exists (default: .env)",
+    )
+    sub = p.add_subparsers(dest="command", required=True)
+
+    def common(sp: argparse.ArgumentParser, *, fixtures: bool = True) -> None:
+        sp.add_argument("--config", default=DEFAULT_CONFIG, help="feeds TOML file")
+        sp.add_argument("--db", default=DEFAULT_DB, help="SQLite state file")
+        sp.add_argument(
+            "--feed",
+            action="append",
+            dest="feeds",
+            metavar="NAME",
+            help="only this feed (repeatable); default: all feeds",
+        )
+        sp.add_argument(
+            "--today", type=_parse_date, default=None, help="override the run date (YYYY-MM-DD)"
+        )
+        if fixtures:
+            sp.add_argument(
+                "--fixtures",
+                metavar="DIR",
+                default=None,
+                help="serve LegiScan responses from recorded JSON files (no network)",
+            )
+
+    sp_run = sub.add_parser("run", help="daily run: fetch, diff, send digest, persist")
+    common(sp_run)
+
+    sp_dry = sub.add_parser("dry-run", help="fetch + diff, render digest to files, change nothing")
+    common(sp_dry)
+    sp_dry.add_argument("--out", default="out", help="output directory for rendered digests")
+
+    sp_bf = sub.add_parser("backfill", help="seed the state DB without sending a digest")
+    common(sp_bf)
+
+    sp_te = sub.add_parser("test-email", help="send a sample digest to verify SMTP settings")
+    sp_te.add_argument("--config", default=DEFAULT_CONFIG)
+    sp_te.add_argument(
+        "--feed", dest="feed", default=None, help="feed whose title/recipients to use"
+    )
+    sp_te.add_argument(
+        "--to", action="append", dest="to", metavar="ADDR", help="override recipients (repeatable)"
+    )
+    return p
+
+
+# --------------------------------------------------------------------------- #
+# helpers
+# --------------------------------------------------------------------------- #
+
+
+def _client(settings: Settings, config: Config, fixtures: str | None) -> BillSource:
+    budget = config.settings.max_queries_per_run
+    if fixtures:
+        return FixtureClient(fixtures, max_queries=budget)
+    if not settings.legiscan_api_key:
+        raise ConfigError("LEGISCAN_API_KEY is not set (and no --fixtures given)")
+    return LegiScanClient(
+        settings.legiscan_api_key, base_url=settings.legiscan_base_url, max_queries=budget
+    )
+
+
+def _memory_copy(db_path: str) -> Store:
+    """In-memory Store seeded from an on-disk DB (dry-run must never mutate real state)."""
+    mem = Store(":memory:")
+    if Path(db_path).is_file():
+        src = sqlite3.connect(db_path)
+        try:
+            src.backup(mem._conn)
+        finally:
+            src.close()
+    return mem
+
+
+def _recipients_fn(settings: Settings):
+    def fn(feed: FeedConfig) -> Sequence[str]:
+        return settings.recipients_for(feed)
+
+    return fn
+
+
+def _report(run: RunResult) -> None:
+    for name, r in run.feeds.items():
+        if r.error:
+            log.error("[%s] FAILED: %s", name, r.error)
+            continue
+        state = "sent" if r.sent else ("skipped" if r.skipped else "rendered")
+        summary = r.digest.summary if r.digest else "-"
+        log.info(
+            "[%s] %s — %s (new=%d changed=%d watch=%d hearings=%d)",
+            name,
+            state,
+            summary,
+            r.new_bills,
+            r.changed,
+            r.watch,
+            r.hearings_announced,
+        )
+
+
+def sample_digest(config: Config, feed: FeedConfig, today: date) -> Digest:
+    """A small fake digest for `test-email` (no live data needed)."""
+    bill = Bill(
+        bill_id=0,
+        state=feed.state,
+        number="HB 0000",
+        title="Sample Bill — Overdose Prevention and Naloxone Access",
+        synopsis="This is a sample entry generated by `billwatch test-email` to verify delivery.",
+        url="https://legiscan.com/",
+        state_url="",
+        status=1,
+        status_date=today.isoformat(),
+        committee="Health and Government Operations",
+        change_hash="sample",
+        session_name="Sample Session",
+        last_action="First Reading",
+        last_action_date=today.isoformat(),
+        history=[Action(date=today.isoformat(), action="First Reading")],
+        hearings=[Hearing(bill_id=0, date=today.isoformat(), committee="Sample Committee")],
+    )
+    d = Digest(
+        feed=feed,
+        run_date=today.isoformat(),
+        lookahead_days=config.lookahead_days(feed),
+        unsubscribe_note=config.settings.unsubscribe_note,
+        subject_prefix=config.settings.subject_prefix,
+    )
+    d.new_bills.append(NewBillItem(bill=bill, reasons=["keyword: naloxone"], event_id=0))
+    d.tracked_count = 1
+    return d
+
+
+# --------------------------------------------------------------------------- #
+# commands
+# --------------------------------------------------------------------------- #
+
+
+def cmd_run(args: argparse.Namespace, settings: Settings, config: Config) -> int:
+    today = args.today or date.today()
+    client = _client(settings, config, args.fixtures)
+    mailer: Mailer = make_mailer(settings)
+    with Store(args.db) as store:
+        run = run_pipeline(
+            config=config,
+            client=client,
+            store=store,
+            today=today,
+            mailer=mailer,
+            recipients_for=_recipients_fn(settings),
+            sender=settings.smtp_from or "",
+            feed_names=args.feeds,
+        )
+    _report(run)
+    return EXIT_OK if run.ok else EXIT_FAILED
+
+
+def cmd_dry_run(args: argparse.Namespace, settings: Settings, config: Config) -> int:
+    today = args.today or date.today()
+    client = _client(settings, config, args.fixtures)
+    out = FileMailer(args.out)
+    with _memory_copy(args.db) as store:
+        run = run_pipeline(
+            config=config,
+            client=client,
+            store=store,
+            today=today,
+            mailer=None,
+            recipients_for=lambda f: [],
+            sender="dry-run@localhost",
+            feed_names=args.feeds,
+        )
+        for name, r in run.feeds.items():
+            if r.digest is None:
+                continue
+            msg = build_email(r.digest, "dry-run@localhost")
+            out.send(msg, [])
+            log.info(
+                "[%s] dry-run digest written: %s", name, ", ".join(str(p) for p in out.written[-2:])
+            )
+    _report(run)
+    return EXIT_OK if run.ok else EXIT_FAILED
+
+
+def cmd_backfill(args: argparse.Namespace, settings: Settings, config: Config) -> int:
+    today = args.today or date.today()
+    client = _client(settings, config, args.fixtures)
+    with Store(args.db) as store:
+        run = run_pipeline(
+            config=config,
+            client=client,
+            store=store,
+            today=today,
+            mailer=None,
+            recipients_for=lambda f: [],
+            sender="",
+            feed_names=args.feeds,
+            announce=False,
+        )
+        for name in run.feeds:
+            log.info("[%s] backfill: %d tracked bill(s) in store", name, store.count_bills(name))
+    _report(run)
+    return EXIT_OK if run.ok else EXIT_FAILED
+
+
+def cmd_test_email(args: argparse.Namespace, settings: Settings, config: Config) -> int:
+    feed = config.feed(args.feed) if args.feed else next(iter(config.feeds.values()))
+    recipients = list(args.to or []) or settings.recipients_for(feed)
+    if not recipients:
+        raise ConfigError(f"no recipients: pass --to or set ${feed.recipients_env}")
+    digest = sample_digest(config, feed, date.today())
+    msg = build_email(digest, settings.smtp_from or "billwatch@localhost")
+    mailer = make_mailer(settings)
+    mailer.send(msg, recipients)
+    log.info("test email sent via %s to %d recipient(s)", mailer.name, len(recipients))
+    return EXIT_OK
+
+
+def render_sample(config: Config, feed: FeedConfig, today: date) -> tuple[str, str]:
+    """Used by tests/docs: HTML + text of the sample digest."""
+    d = sample_digest(config, feed, today)
+    return render_html(d), render_text(d)
+
+
+COMMANDS = {
+    "run": cmd_run,
+    "dry-run": cmd_dry_run,
+    "backfill": cmd_backfill,
+    "test-email": cmd_test_email,
+}
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    if args.env_file:
+        load_dotenv(args.env_file)
+    settings = Settings.from_env()
+    try:
+        config = load_config(args.config)
+        return COMMANDS[args.command](args, settings, config)
+    except ConfigError as exc:
+        log.error("configuration error: %s", exc)
+        return EXIT_USAGE
+    except (LegiScanError, MailError) as exc:
+        log.error("%s", exc)
+        return EXIT_FAILED
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())

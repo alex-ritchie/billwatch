@@ -1,0 +1,21 @@
+{
+  "status": "OK",
+  "searchresult": {
+    "summary": {
+      "page": "1 of 1",
+      "range": "1 - 1",
+      "relevance": "100% - 0%",
+      "count": 1,
+      "page_current": 1,
+      "page_total": 1,
+      "query": "harm reduction"
+    },
+    "results": [
+      {
+        "relevance": 64,
+        "bill_id": 1008,
+        "change_hash": "bc8151521b48fceb22e62612717cd1e8"
+      }
+    ]
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "status": "OK",
+  "bill": {
+    "bill_id": 1004,
+    "change_hash": "bcfe32d7296044dd0a354c782253186b",
+    "session_id": 2200,
+    "session": {
+      "session_id": 2200,
+      "state_id": 21,
+      "year_start": 2026,
+      "year_end": 2026,
+      "prefile": 0,
+      "sine_die": 0,
+      "prior": 0,
+      "special": 0,
+      "session_tag": "Regular Session",
+      "session_title": "2026 Regular Session",
+      "session_name": "2026 Regular Session"
+    },
+    "url": "https://legiscan.com/MD/bill/HB300/2026",
+    "state_link": "https://mgaleg.maryland.gov/mgawebsite/Legislation/Details/hb300?ys=2026RS",
+    "completed": 0,
+    "status": 1,
+    "status_date": "2026-01-14",
+    "progress": [
+      {
+        "date": "2026-01-14",
+        "event": 1
+      }
+    ],
+    "state": "MD",
+    "state_id": 21,
+    "bill_number": "HB300",
+    "bill_type": "B",
+    "bill_type_id": 1,
+    "body": "H",
+    "body_id": 1,
+    "current_body": "H",
+    "current_body_id": 1,
+    "title": "Health Occupations - Licensing Renewals - Continuing Education",
+    "description": "Altering the continuing education requirements for the renewal of certain health occupations licenses.",
+    "pending_committee_id": 1,
+    "committee": {
+      "committee_id": 1,
+      "chamber": "H",
+      "chamber_id": 1,
+      "name": "Health and Government Operations"
+    },
+    "referrals": [
+      {
+        "date": "2026-01-14",
+        "committee_id": 1,
+        "chamber": "H",
+        "chamber_id": 1,
+        "name": "Health and Government Operations"
+      }
+    ],
+    "history": [
+      {
+        "date": "2026-01-14",
+        "action": "First Reading Health and Government Operations",
+        "chamber": "H",
+        "chamber_id": 1,
+        "importance": 1
+      }
+    ],
+    "sponsors": [
+      {
+        "people_id": 903,
+        "party": "D",
+        "role": "Rep",
+        "name": "Delegate Diaz",
+        "sponsor_type_id": 1,
+        "sponsor_order": 1
+      }
+    ],
+    "sasts": [],
+    "subjects": [],
+    "texts": [
+      {
+        "doc_id": 6004,
+        "date": "2026-01-14",
+        "type": "Introduced",
+        "type_id": 1,
+        "mime": "application/pdf",
+        "mime_id": 2,
+        "url": "https://legiscan.com/MD/text/HB300/2026",
+        "state_link": "",
+        "text_size": 12345
+      }
+    ],
+    "votes": [],
+    "amendments": [],
+    "supplements": [],
+    "calendar": []
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "status": "OK",
+  "searchresult": {
+    "summary": {
+      "page": "1 of 1",
+      "range": "1 - 4",
+      "relevance": "100% - 0%",
+      "count": 4,
+      "page_current": 1,
+      "page_total": 1,
+      "query": "overdose"
+    },
+    "results": [
+      {
+        "relevance": 100,
+        "bill_id": 1001,
+        "change_hash": "d7e5f68790fca627781cb5cf102f1828"
+      },
+      {
+        "relevance": 82,
+        "bill_id": 1006,
+        "change_hash": "6f04ab783e3bde112bb3ea2a0be46883"
+      },
+      {
+        "relevance": 55,
+        "bill_id": 1008,
+        "change_hash": "bc8151521b48fceb22e62612717cd1e8"
+      },
+      {
+        "relevance": 31,
+        "bill_id": 1005,
+        "change_hash": "acd26b1689c835589aebd30134dcfcfe"
+      }
+    ]
+  }
+}

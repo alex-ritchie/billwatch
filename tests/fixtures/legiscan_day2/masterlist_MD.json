@@ -1,0 +1,58 @@
+{
+  "status": "OK",
+  "masterlist": {
+    "session": {
+      "session_id": 2200,
+      "state_id": 21,
+      "year_start": 2026,
+      "year_end": 2026,
+      "prefile": 0,
+      "sine_die": 0,
+      "prior": 0,
+      "special": 0,
+      "session_tag": "Regular Session",
+      "session_title": "2026 Regular Session",
+      "session_name": "2026 Regular Session"
+    },
+    "0": {
+      "bill_id": 1001,
+      "number": "HB101",
+      "change_hash": "d7e5f68790fca627781cb5cf102f1828"
+    },
+    "1": {
+      "bill_id": 1002,
+      "number": "SB55",
+      "change_hash": "f55bc41645a70e449d1c163715ad0ad7"
+    },
+    "2": {
+      "bill_id": 1003,
+      "number": "HB210",
+      "change_hash": "0016cec94f98cb5f80cb243f1050ff0c"
+    },
+    "3": {
+      "bill_id": 1004,
+      "number": "HB300",
+      "change_hash": "ac06d92bde39f5e47de793d0be698bac"
+    },
+    "4": {
+      "bill_id": 1005,
+      "number": "SB120",
+      "change_hash": "acd26b1689c835589aebd30134dcfcfe"
+    },
+    "5": {
+      "bill_id": 1006,
+      "number": "HB400",
+      "change_hash": "6f04ab783e3bde112bb3ea2a0be46883"
+    },
+    "6": {
+      "bill_id": 1007,
+      "number": "SB130",
+      "change_hash": "0b9bfe4cc58d0229605175566310ac30"
+    },
+    "7": {
+      "bill_id": 1008,
+      "number": "HB600",
+      "change_hash": "bc8151521b48fceb22e62612717cd1e8"
+    }
+  }
+}

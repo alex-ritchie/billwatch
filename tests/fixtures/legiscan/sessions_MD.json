@@ -1,0 +1,44 @@
+{
+  "status": "OK",
+  "sessions": [
+    {
+      "session_id": 2201,
+      "state_id": 21,
+      "year_start": 2026,
+      "year_end": 2026,
+      "prefile": 0,
+      "sine_die": 0,
+      "prior": 0,
+      "special": 1,
+      "session_tag": "Special Session",
+      "session_title": "2026 1st Special Session",
+      "session_name": "2026 1st Special Session"
+    },
+    {
+      "session_id": 2200,
+      "state_id": 21,
+      "year_start": 2026,
+      "year_end": 2026,
+      "prefile": 0,
+      "sine_die": 0,
+      "prior": 0,
+      "special": 0,
+      "session_tag": "Regular Session",
+      "session_title": "2026 Regular Session",
+      "session_name": "2026 Regular Session"
+    },
+    {
+      "session_id": 2100,
+      "state_id": 21,
+      "year_start": 2025,
+      "year_end": 2025,
+      "prefile": 0,
+      "sine_die": 1,
+      "prior": 1,
+      "special": 0,
+      "session_tag": "Regular Session",
+      "session_title": "2025 Regular Session",
+      "session_name": "2025 Regular Session"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+# CI on pushes and pull requests: lint, tests, and an offline dry-run against recorded fixtures.
+# Uses `pull_request` (never `pull_request_target`) so fork PRs run without secrets (design §8.3).
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "state/**"          # daily state commits should not trigger CI
+  pull_request: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9   # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install (frozen lockfile)
+        run: uv sync --frozen
+
+      - name: Lint
+        run: uv run --frozen ruff check .
+
+      - name: Unit + integration tests
+        run: uv run --frozen pytest -q
+
+      - name: Offline dry-run against recorded fixtures
+        run: |
+          uv run --frozen billwatch --env-file "" dry-run \
+            --config config/feeds.toml \
+            --db state/billwatch.db \
+            --fixtures tests/fixtures/legiscan \
+            --today 2026-02-01 \
+            --out out/
+          test -s out/md-substance-use.html

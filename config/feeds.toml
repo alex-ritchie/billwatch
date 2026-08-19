@@ -1,0 +1,48 @@
+# billwatch feed configuration.
+# A *feed* = (jurisdiction, topic filter, recipients, schedule) — the unit of
+# extensibility. Adding a new (state, topic) pair is a new [feeds.*] block.
+
+[settings]
+# How far ahead to look for hearings in the "Upcoming hearings" section.
+hearing_lookahead_days = 14
+# When nothing changed: false = skip the send and log it; true = send a minimal note.
+send_empty = false
+# Prefix for the email subject line.
+subject_prefix = "[billwatch]"
+# Shown at the bottom of every digest (CAN-SPAM hygiene, design §7).
+unsubscribe_note = "To unsubscribe, reply to this email with 'unsubscribe' in the subject."
+# Minimum LegiScan full-text search relevance (0-100) for a search hit to count.
+search_min_relevance = 50
+# Safety cap on LegiScan queries per run (per state). Remaining candidates roll
+# over to the next run because diffs are computed against stored state.
+max_queries_per_run = 400
+
+[feeds.md-substance-use]
+state = "MD"
+schedule = "daily"
+title = "Maryland substance use & overdose legislation"
+# Optional: pin a LegiScan session_id. Default: latest regular session for the state.
+# session_id = 2144
+
+# Primary filter: keywords against title + synopsis (case-insensitive,
+# word-boundary regex). Curated with the domain expert.
+keywords = [
+  "opioid", "overdose", "naloxone", "fentanyl", "xylazine",
+  "harm reduction", "controlled dangerous substance", "buprenorphine",
+  "methadone", "substance use", "substance abuse", "drug treatment",
+  "recovery residence", "syringe", "prescription drug monitoring",
+]
+
+# Secondary net: LegiScan full-text search queries (catches bills whose
+# title/synopsis are vague but whose text is on-topic).
+searches = ["overdose", "opioid", "harm reduction"]
+
+# Tertiary signal (optional): flag anything referred to these committees
+# for manual review in a separate digest section, even if no keyword hit.
+watch_committees = ["Health and Government Operations", "Finance"]
+
+exclude_keywords = []   # escape hatch for noisy false positives
+
+# Environment variable holding this feed's comma-separated recipient list.
+# Defaults to RECIPIENTS. Per-feed lists (Phase 3) just point at another secret.
+recipients_env = "RECIPIENTS"

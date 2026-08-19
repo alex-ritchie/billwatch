@@ -1,0 +1,26 @@
+{
+  "status": "OK",
+  "searchresult": {
+    "summary": {
+      "page": "1 of 1",
+      "range": "1 - 2",
+      "relevance": "100% - 0%",
+      "count": 2,
+      "page_current": 1,
+      "page_total": 1,
+      "query": "opioid"
+    },
+    "results": [
+      {
+        "relevance": 100,
+        "bill_id": 1001,
+        "change_hash": "91fe36f1629caa7c25b2605484bc192b"
+      },
+      {
+        "relevance": 60,
+        "bill_id": 1003,
+        "change_hash": "0016cec94f98cb5f80cb243f1050ff0c"
+      }
+    ]
+  }
+}

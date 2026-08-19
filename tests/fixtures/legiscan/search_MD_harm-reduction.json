@@ -1,0 +1,15 @@
+{
+  "status": "OK",
+  "searchresult": {
+    "summary": {
+      "page": "1 of 1",
+      "range": "1 - 0",
+      "relevance": "100% - 0%",
+      "count": 0,
+      "page_current": 1,
+      "page_total": 1,
+      "query": "harm reduction"
+    },
+    "results": []
+  }
+}

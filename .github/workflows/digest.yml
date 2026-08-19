@@ -1,0 +1,57 @@
+# Daily digest runner (design §6.2).
+#
+# Security posture (design §8.3):
+#   * every action is pinned to a full 40-char commit SHA (NFR7); Dependabot bumps them
+#   * GITHUB_TOKEN carries only contents:write (needed to commit the state DB)
+#   * secrets are only ever exposed as env vars to the billwatch step
+name: daily-digest
+
+on:
+  schedule:
+    - cron: "30 11 * * *"   # 11:30 UTC ≈ 07:30 ET (cron is always UTC; off the hour on purpose)
+  workflow_dispatch: {}      # manual "run now" button
+
+permissions:
+  contents: write            # to commit the state DB back
+
+concurrency:
+  group: digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          persist-credentials: true   # needed for the git push below
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9   # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install (frozen lockfile)
+        run: uv sync --frozen --no-dev
+
+      - name: Run billwatch
+        id: run
+        env:
+          LEGISCAN_API_KEY:  ${{ secrets.LEGISCAN_API_KEY }}
+          SMTP_USERNAME:     ${{ secrets.SMTP_USERNAME }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          SMTP_FROM:         ${{ secrets.SMTP_FROM }}
+          RECIPIENTS:        ${{ secrets.RECIPIENTS }}   # comma-separated, BCC'd, never logged
+        run: uv run --frozen --no-dev billwatch --env-file "" run --config config/feeds.toml --db state/billwatch.db
+
+      # Persist even if delivery failed: fetched state is committed and unsent events are
+      # merged into the next digest (design §5.5 / NFR3). A fetch failure rolls back its own
+      # work before exiting, so there is nothing harmful to commit in that case either.
+      - name: Persist state
+        if: ${{ !cancelled() }}
+        run: |
+          git config user.name  "billwatch-bot"
+          git config user.email "actions@github.com"
+          git add state/billwatch.db
+          git diff --cached --quiet || git commit -m "state: $(date -u +%F)"
+          git push

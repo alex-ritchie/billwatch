@@ -1,0 +1,47 @@
+{{ feed_title }}
+Digest for {{ run_date }}{% if session_name %} · {{ session_name }}{% endif %}
+{{ summary }}
+{% if is_empty %}
+Nothing new since the last digest — no new matching bills, no movement on
+tracked bills, and no hearings in the next {{ lookahead_days }} days.
+{% endif %}
+{% if new_bills %}
+NEW BILLS ({{ new_bills|length }})
+{{ '=' * 60 }}
+{% for item in new_bills %}{% set b = item.bill %}
+* {{ b.number }} — {{ b.title }}
+  Status: {{ b.status_label }}{% if b.status_date %} ({{ b.status_date }}){% endif %}{% if b.committee %} · Committee: {{ b.committee }}{% endif %}
+{% if b.synopsis %}  {{ b.synopsis|truncate(300) }}
+{% endif %}{% if item.reasons %}  Matched: {{ item.reasons|join('; ') }}
+{% endif %}  {{ b.url }}{% if b.state_url %}
+  {{ b.state_url }}{% endif %}
+{% endfor %}{% endif %}
+{% if movement %}
+MOVEMENT ({{ movement|length }})
+{{ '=' * 60 }}
+{% for item in movement %}{% set b = item.bill %}
+* {{ b.number }} — {{ b.title }}
+  {% if item.status_changed %}Status: {{ item.old_status_label }} -> {{ item.new_status_label }}{% else %}Status: {{ b.status_label }}{% endif %}{% if item.committee_changed %} · Committee: {{ item.old_committee or '-' }} -> {{ item.new_committee or '-' }}{% elif b.committee %} · Committee: {{ b.committee }}{% endif %}
+{% for a in item.actions %}  - {{ a.date }} — {{ a.action }}
+{% endfor %}  {{ b.url }}
+{% endfor %}{% endif %}
+{% if hearings %}
+UPCOMING HEARINGS — next {{ lookahead_days }} days ({{ hearings|length }})
+{{ '=' * 60 }}
+{% for item in hearings %}{% set b = item.bill %}{% set h = item.hearing %}
+* {{ h.date }}{% if h.time %} {{ h.time }}{% endif %} — {{ b.number }} — {{ b.title|truncate(100) }}
+  {{ h.committee }}{% if h.location %} · {{ h.location }}{% endif %}
+  {{ b.url }}
+{% endfor %}{% endif %}
+{% if watch %}
+COMMITTEE WATCH ({{ watch|length }})
+{{ '=' * 60 }}
+(Referred to a watched committee but not matched by any keyword — for manual review.)
+{% for item in watch %}{% set b = item.bill %}
+* {{ b.number }} — {{ b.title|truncate(140) }} ({{ item.reasons|join('; ') }})
+  {{ b.url }}
+{% endfor %}{% endif %}
+--
+Data from LegiScan (https://legiscan.com/). Tracked bills in this feed: {{ tracked_count }}.
+{% if unsubscribe_note %}{{ unsubscribe_note }}
+{% endif %}Sent by billwatch.

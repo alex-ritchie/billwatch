@@ -11,11 +11,14 @@ Every request is counted so quota use (NFR4) can be logged and capped.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
 import re
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -24,9 +27,11 @@ import requests
 from .models import (
     Action,
     Bill,
+    BillText,
     Hearing,
     MasterEntry,
     MasterList,
+    RelatedBill,
     SearchHit,
     SessionInfo,
 )
@@ -55,6 +60,7 @@ class BillSource(Protocol):
     def get_session_list(self, state: str) -> list[SessionInfo]: ...
     def get_master_list(self, state: str, session_id: int | None = None) -> MasterList: ...
     def get_bill(self, bill_id: int) -> Bill: ...
+    def get_bill_text(self, doc_id: int) -> TextDocument: ...
     def search(self, state: str, query: str, session_id: int | None = None) -> list[SearchHit]: ...
     def remaining(self) -> int | None: ...
     @property
@@ -204,6 +210,32 @@ def parse_bill(payload: dict) -> Bill:
             )
         )
 
+    sasts: list[RelatedBill] = []
+    for r in b.get("sasts") or []:
+        if isinstance(r, dict) and r.get("sast_bill_id"):
+            sasts.append(
+                RelatedBill(
+                    bill_id=int(r["sast_bill_id"]),
+                    number=_s(r.get("sast_bill_number")),
+                    relation=_s(r.get("type")),
+                )
+            )
+
+    texts: list[BillText] = []
+    for t in b.get("texts") or []:
+        if isinstance(t, dict) and t.get("doc_id"):
+            texts.append(
+                BillText(
+                    doc_id=int(t["doc_id"]),
+                    type=_s(t.get("type")),
+                    date=_s(t.get("date")),
+                    mime=_s(t.get("mime")),
+                    url=_s(t.get("url")),
+                    state_url=_s(t.get("state_link")),
+                    size=int(t.get("text_size") or 0),
+                )
+            )
+
     last = history[-1] if history else None
     status_raw = b.get("status")
     try:
@@ -231,6 +263,39 @@ def parse_bill(payload: dict) -> Bill:
         sponsors=sponsors,
         history=history,
         hearings=hearings,
+        sasts=sasts,
+        texts=texts,
+    )
+
+
+@dataclass(frozen=True)
+class TextDocument:
+    """getBillText payload: the raw document bytes plus its mime type."""
+
+    doc_id: int
+    bill_id: int | None
+    mime: str
+    date: str
+    type: str
+    content: bytes
+
+
+def parse_bill_text(payload: dict) -> TextDocument:
+    t = payload.get("text")
+    if not isinstance(t, dict) or "doc_id" not in t:
+        raise LegiScanError("malformed text response: missing 'text'")
+    raw = t.get("doc") or ""
+    try:
+        content = base64.b64decode(raw) if raw else b""
+    except (ValueError, binascii.Error) as exc:
+        raise LegiScanError("malformed text response: bad base64 document") from exc
+    return TextDocument(
+        doc_id=int(t["doc_id"]),
+        bill_id=int(t["bill_id"]) if t.get("bill_id") else None,
+        mime=_s(t.get("mime")),
+        date=_s(t.get("date")),
+        type=_s(t.get("type")),
+        content=content,
     )
 
 
@@ -351,6 +416,9 @@ class LegiScanClient:
     def get_bill(self, bill_id: int) -> Bill:
         return parse_bill(self._request("getBill", id=bill_id))
 
+    def get_bill_text(self, doc_id: int) -> TextDocument:
+        return parse_bill_text(self._request("getBillText", id=doc_id))
+
     def search(self, state: str, query: str, session_id: int | None = None) -> list[SearchHit]:
         if session_id is not None:
             payload = self._request("getSearchRaw", id=session_id, query=query)
@@ -376,6 +444,7 @@ class FixtureClient:
       masterlist_<STATE>.json        getMasterListRaw payload
       bill_<ID>.json                 getBill payload
       search_<STATE>_<slug>.json     getSearchRaw payload     (optional)
+      text_<DOC_ID>.json             getBillText payload      (optional)
     """
 
     def __init__(self, directory: str | Path, *, max_queries: int | None = None) -> None:
@@ -417,6 +486,9 @@ class FixtureClient:
 
     def get_bill(self, bill_id: int) -> Bill:
         return parse_bill(self._load(f"bill_{bill_id}.json"))
+
+    def get_bill_text(self, doc_id: int) -> TextDocument:
+        return parse_bill_text(self._load(f"text_{doc_id}.json"))
 
     def search(self, state: str, query: str, session_id: int | None = None) -> list[SearchHit]:
         payload = self._load(f"search_{state}_{search_slug(query)}.json", optional=True)

@@ -50,6 +50,11 @@
       "change_hash": "0b9bfe4cc58d0229605175566310ac30"
     },
     "7": {
+      "bill_id": 1009,
+      "number": "SB101",
+      "change_hash": "ae5583e8f1edd2d633a882dce6feeeca"
+    },
+    "8": {
       "bill_id": 1008,
       "number": "HB600",
       "change_hash": "bc8151521b48fceb22e62612717cd1e8"

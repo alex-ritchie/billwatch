@@ -28,6 +28,7 @@ from .filters import FeedFilter
 from .legiscan import BillSource, LegiScanError, QuotaExceeded
 from .models import Bill
 from .store import Store
+from .texts import sync_texts
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +53,8 @@ class ReevalResult:
     removed: list[Change] = field(default_factory=list)
     updated: list[Change] = field(default_factory=list)
     unchanged: int = 0
+    refetched: int = 0
+    texts_fetched: int = 0
     queries: int = 0
     dry_run: bool = False
 
@@ -60,10 +63,15 @@ class ReevalResult:
         return self.added + self.promoted + self.demoted + self.removed + self.updated
 
     def summary(self) -> str:
+        extra = ""
+        if self.refetched:
+            extra += f", {self.refetched} refetched"
+        if self.texts_fetched:
+            extra += f", {self.texts_fetched} text(s) fetched"
         return (
             f"{len(self.added)} added, {len(self.promoted)} promoted, {len(self.demoted)} demoted, "
             f"{len(self.removed)} removed, {len(self.updated)} reasons updated, "
-            f"{self.unchanged} unchanged (of {self.cached} cached)"
+            f"{self.unchanged} unchanged (of {self.cached} cached){extra}"
         )
 
 
@@ -113,12 +121,17 @@ def reevaluate_feed(
     prune: bool = True,
     announce: bool = False,
     dry_run: bool = False,
+    refetch: bool = False,
+    sync_text: bool = True,
 ) -> ReevalResult:
     """Apply the feed's current rules to every cached bill of the chosen session.
 
     session_id: which session's cached bills to consider; default = the feed's pinned
     session, else the newest session present in the cache for that state.
     prune: when False, only add/promote — never demote/remove.
+    refetch: re-fetch full detail for every tracked bill (1 query each) — refreshes
+    history/hearings/cross-file links/text versions for bills stored before those existed.
+    sync_text: fetch the latest text version for tracked bills that lack it.
     dry_run: compute and report, then roll back.
     """
     if session_id is None:
@@ -142,10 +155,52 @@ def reevaluate_feed(
     flt = FeedFilter(feed)
     when = datetime.now(UTC).replace(microsecond=0).isoformat()
     sent = not announce
+    by_id = {b.bill_id: b for b in cached}
 
-    for lite in cached:
-        match = flt.evaluate(lite, search_hits=hits.get(lite.bill_id, []))
-        existing = store.get_bill(feed.name, lite.bill_id)
+    # Optional refresh of every tracked bill's full detail (brings in sasts/texts/history).
+    if refetch and client is not None:
+        for tb in store.tracked_bills(feed.name):
+            rem = client.remaining()
+            if rem is not None and rem <= 0:
+                break
+            try:
+                full = client.get_bill(tb.bill.bill_id)
+            except (QuotaExceeded, LegiScanError) as exc:
+                log.warning(
+                    "[%s] refetch %s failed: %s", feed.name, tb.bill.number, type(exc).__name__
+                )
+                continue
+            store.cache_bill(full, when)
+            store.upsert_bill(feed.name, full, tracked=True, reasons=tb.reasons, when=when)
+            store.replace_hearings(feed.name, full.bill_id, full.hearings)
+            by_id[full.bill_id] = full
+            res.refetched += 1
+
+    # Pass 1: keyword/search rules for every cached bill.
+    base = {bid: flt.evaluate(b, search_hits=hits.get(bid, [])) for bid, b in by_id.items()}
+
+    # Pass 2: cross-files of rule-matched bills are matches too (same bill, other chamber).
+    crossfile_of: dict[int, list[str]] = {}
+    for bid, m in base.items():
+        if not m.matched:
+            continue
+        src = by_id[bid]
+        links = src.crossfiles
+        if not links:  # cache row may predate the sasts column; fall back to the stored bill
+            tb = store.get_bill(feed.name, bid)
+            links = tb.bill.crossfiles if tb else []
+        for rel in links:
+            if rel.bill_id in by_id:
+                crossfile_of.setdefault(rel.bill_id, []).append(src.number)
+
+    touched: list[Bill] = []
+    for bid, lite in by_id.items():
+        match = (
+            flt.evaluate(lite, search_hits=hits.get(bid, []), crossfile_of=crossfile_of[bid])
+            if bid in crossfile_of
+            else base[bid]
+        )
+        existing = store.get_bill(feed.name, bid)
         ch = Change(
             lite.number, lite.title, "", match.reasons, before=existing.reasons if existing else []
         )
@@ -158,6 +213,7 @@ def reevaluate_feed(
                 store.add_event(
                     feed.name, bill.bill_id, "new", {"reasons": match.reasons}, when, sent=sent
                 )
+                touched.append(bill)
                 ch.action = "added"
                 res.added.append(ch)
             elif match.watch_only:
@@ -181,10 +237,13 @@ def reevaluate_feed(
                     res.updated.append(ch)
                 else:
                     res.unchanged += 1
+                if sync_text:
+                    touched.append(existing.bill)
             elif not prune:
                 res.unchanged += 1
             elif match.watch_only:
                 store.replace_hearings(feed.name, existing.bill.bill_id, [])
+                store.delete_text(feed.state, existing.bill.bill_id)
                 store.upsert_bill(
                     feed.name, existing.bill, tracked=False, reasons=match.reasons, when=when
                 )
@@ -192,6 +251,7 @@ def reevaluate_feed(
                 res.demoted.append(ch)
             else:
                 store.delete_bill(feed.name, existing.bill.bill_id)
+                store.delete_text(feed.state, existing.bill.bill_id)
                 ch.action = "removed"
                 res.removed.append(ch)
             continue
@@ -199,11 +259,13 @@ def reevaluate_feed(
         # watch-only row
         if match.matched:
             bill = _full_bill(client, lite, fetch=fetch_details)
+            store.delete_events(feed.name, bill.bill_id, kind="watch", unsent_only=True)
             store.upsert_bill(feed.name, bill, tracked=True, reasons=match.reasons, when=when)
             store.replace_hearings(feed.name, bill.bill_id, bill.hearings)
             store.add_event(
                 feed.name, bill.bill_id, "new", {"reasons": match.reasons}, when, sent=sent
             )
+            touched.append(bill)
             ch.action = "promoted"
             res.promoted.append(ch)
         elif match.watch_only:
@@ -221,6 +283,9 @@ def reevaluate_feed(
             res.removed.append(ch)
         else:
             res.unchanged += 1
+
+    if sync_text and not dry_run:
+        res.texts_fetched = sync_texts(store, client, touched, when=when).fetched
 
     res.queries = (client.query_count - before_q) if client else 0
     if dry_run:

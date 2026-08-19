@@ -59,6 +59,32 @@ class Action:
     chamber: str | None = None
 
 
+@dataclass(frozen=True)
+class RelatedBill:
+    """A SAST ("Same As / Similar To") link: cross-files, companions, replacements."""
+
+    bill_id: int
+    number: str
+    relation: str  # "Crossfiled", "Same As", "Similar To", "Replaced by", ...
+
+    @property
+    def is_crossfile(self) -> bool:
+        return self.relation.lower().replace("-", "").replace(" ", "") in ("crossfiled", "sameas")
+
+
+@dataclass(frozen=True)
+class BillText:
+    """One text version of a bill (Introduced, Engrossed, Enrolled, Chaptered, ...)."""
+
+    doc_id: int
+    type: str
+    date: str
+    mime: str
+    url: str  # LegiScan
+    state_url: str  # legislature's own PDF/HTML
+    size: int = 0
+
+
 @dataclass
 class Bill:
     """A bill as we care about it, independent of data source."""
@@ -82,6 +108,19 @@ class Bill:
     sponsors: list[str] = field(default_factory=list)
     history: list[Action] = field(default_factory=list)
     hearings: list[Hearing] = field(default_factory=list)
+    sasts: list[RelatedBill] = field(default_factory=list)
+    texts: list[BillText] = field(default_factory=list)
+
+    @property
+    def crossfiles(self) -> list[RelatedBill]:
+        return [r for r in self.sasts if r.is_crossfile]
+
+    @property
+    def latest_text(self) -> BillText | None:
+        """Newest text version (by date, then doc_id)."""
+        if not self.texts:
+            return None
+        return max(self.texts, key=lambda t: (t.date, t.doc_id))
 
     @property
     def status_label(self) -> str:

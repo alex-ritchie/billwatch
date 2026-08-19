@@ -19,6 +19,7 @@ from .legiscan import BillSource, LegiScanError, QuotaExceeded, pick_current_ses
 from .mailer import Mailer, MailError
 from .models import Bill, StatusChange, TrackedBill
 from .store import Store
+from .texts import sync_texts
 
 log = logging.getLogger(__name__)
 
@@ -167,6 +168,84 @@ def process_bill(
 
 
 # --------------------------------------------------------------------------- #
+# Cross-file adoption
+# --------------------------------------------------------------------------- #
+
+
+def adopt_crossfiles(
+    store: Store,
+    feed: FeedConfig,
+    client: BillSource | None,
+    *,
+    when: str,
+    result: FeedRunResult | None = None,
+    announce: bool = True,
+    fetched: dict[int, Bill] | None = None,
+    fetch: bool = True,
+) -> list[Bill]:
+    """Track the cross-filed companions of every tracked bill that are not yet tracked.
+
+    Detail comes from `fetched` (bills already retrieved this run), else one getBill query
+    (if a client is given, `fetch` is true and budget allows), else the cached fields.
+    Returns the adopted bills.
+    """
+    fetched = fetched or {}
+    adopted: list[Bill] = []
+    for tb in store.tracked_bills(feed.name):
+        for rel in tb.bill.crossfiles:
+            existing = store.get_bill(feed.name, rel.bill_id)
+            if existing is not None and existing.tracked:
+                continue
+            reason = f"crossfile: {tb.bill.number}"
+            bill: Bill | None = fetched.get(rel.bill_id)
+            if bill is None and client is not None and fetch:
+                rem = client.remaining()
+                if rem is None or rem > 0:
+                    try:
+                        bill = client.get_bill(rel.bill_id)
+                        store.cache_bill(bill, when)
+                    except (QuotaExceeded, LegiScanError) as exc:
+                        log.warning(
+                            "[%s] could not fetch cross-file %s of %s (%s)",
+                            feed.name,
+                            rel.number,
+                            tb.bill.number,
+                            type(exc).__name__,
+                        )
+            if bill is None:
+                bill = store.cached_bill(feed.state, rel.bill_id)
+            if bill is None:
+                log.info(
+                    "[%s] cross-file %s of %s not fetched yet; will adopt when it is",
+                    feed.name,
+                    rel.number,
+                    tb.bill.number,
+                )
+                continue
+            reasons = [
+                r for r in (existing.reasons if existing else []) if not r.startswith("committee")
+            ]
+            if reason not in reasons:
+                reasons.append(reason)
+            if existing is not None:  # watch-only → promoted: drop its pending watch flag
+                dropped = store.delete_events(
+                    feed.name, bill.bill_id, kind="watch", unsent_only=True
+                )
+                if result is not None and dropped:
+                    result.watch = max(0, result.watch - 1)
+            store.upsert_bill(feed.name, bill, tracked=True, reasons=reasons, when=when)
+            store.replace_hearings(feed.name, bill.bill_id, bill.hearings)
+            store.add_event(
+                feed.name, bill.bill_id, "new", {"reasons": reasons}, when, sent=not announce
+            )
+            if result is not None:
+                result.new_bills += 1
+            adopted.append(bill)
+            log.info("[%s] adopted cross-file %s of %s", feed.name, bill.number, tb.bill.number)
+    return adopted
+
+
+# --------------------------------------------------------------------------- #
 # Fetch phase for one (state, session) group of feeds
 # --------------------------------------------------------------------------- #
 
@@ -238,6 +317,7 @@ def fetch_state(
     filters = {f.name: FeedFilter(f) for f in feeds}
     ordered = sorted(candidates.items())
     fetched = 0
+    fetched_bills: list[Bill] = []
     for idx, (bill_id, mhash) in enumerate(ordered):
         rem = client.remaining()
         if rem is not None and rem <= 0:
@@ -258,6 +338,7 @@ def fetch_state(
             )
             break
         fetched += 1
+        fetched_bills.append(bill)
         store.cache_bill(bill, when)
         for feed in feeds:
             process_bill(
@@ -276,6 +357,20 @@ def fetch_state(
         store.mark_seen(scope, bill_id, mhash, when)
     run.fetched += fetched
     log.info("[%s] fetched %d bill detail(s)", state, fetched)
+
+    # Cross-files: a matched bill's companion in the other chamber is the same bill → track it.
+    fetched_by_id = {b.bill_id: b for b in fetched_bills}
+    touched = set(fetched_by_id)
+    for feed in feeds:
+        for b in adopt_crossfiles(
+            store, feed, client, when=when, result=results[feed.name], fetched=fetched_by_id
+        ):
+            touched.add(b.bill_id)
+
+    # Full text for tracked bills touched this run (latest version only; 1 query per new doc).
+    for feed in feeds:
+        bills = [tb.bill for tb in store.tracked_bills(feed.name) if tb.bill.bill_id in touched]
+        sync_texts(store, client, bills, when=when)
 
 
 # --------------------------------------------------------------------------- #

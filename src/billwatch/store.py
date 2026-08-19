@@ -17,9 +17,9 @@ from collections.abc import Iterable
 from dataclasses import asdict
 from pathlib import Path
 
-from .models import Action, Bill, DigestEvent, Hearing, TrackedBill
+from .models import Action, Bill, BillText, DigestEvent, Hearing, RelatedBill, TrackedBill
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS bills (
   referrals     TEXT,      -- JSON list
   sponsors      TEXT,      -- JSON list
   history       TEXT,      -- JSON list of {date, action, chamber}
+  sasts         TEXT,      -- JSON list of {bill_id, number, relation} (cross-files etc.)
+  texts         TEXT,      -- JSON list of text versions {doc_id, type, date, mime, url, ...}
   tracked       INTEGER NOT NULL DEFAULT 1,   -- 1 = keyword/search match, 0 = committee-watch only
   reasons       TEXT,      -- JSON list of match reasons
   first_seen    TEXT,
@@ -79,12 +81,29 @@ CREATE TABLE IF NOT EXISTS bill_cache (
   synopsis      TEXT,
   committee     TEXT,
   referrals     TEXT,      -- JSON list
+  sasts         TEXT,      -- JSON list (cross-file links)
   url           TEXT,
   state_url     TEXT,
   status        INTEGER,
   status_date   TEXT,
   change_hash   TEXT,
   last_fetched  TEXT,
+  PRIMARY KEY (state, bill_id)
+);
+
+-- Latest text version of each TRACKED bill, extracted and zlib-compressed (design: keep the
+-- committed DB small; ~10 KB per bill). Shared across feeds.
+CREATE TABLE IF NOT EXISTS bill_texts (
+  state         TEXT    NOT NULL,
+  bill_id       INTEGER NOT NULL,
+  doc_id        INTEGER NOT NULL,
+  version       TEXT,      -- Introduced | Engrossed | Enrolled | Chaptered ...
+  date          TEXT,
+  mime          TEXT,
+  source_url    TEXT,
+  chars         INTEGER,
+  text_zlib     BLOB,
+  fetched_at    TEXT,
   PRIMARY KEY (state, bill_id)
 );
 
@@ -146,8 +165,19 @@ class Store:
         self._init_schema()
 
     # -- lifecycle --------------------------------------------------------- #
+    _MIGRATION_COLUMNS = (
+        ("bills", "sasts", "TEXT"),
+        ("bills", "texts", "TEXT"),
+        ("bill_cache", "sasts", "TEXT"),
+    )
+
     def _init_schema(self) -> None:
         self._conn.executescript(_SCHEMA)
+        # additive migrations for DBs created by earlier versions
+        for table, col, typ in self._MIGRATION_COLUMNS:
+            cols = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+            if col not in cols:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
         self._conn.execute(
             """INSERT INTO meta (key, value) VALUES ('schema_version', ?)
                ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
@@ -200,13 +230,14 @@ class Store:
     def cache_bill(self, bill: Bill, when: str) -> None:
         self._conn.execute(
             """INSERT INTO bill_cache (state, bill_id, session_id, session_name, number, title,
-                 synopsis, committee, referrals, url, state_url, status, status_date,
+                 synopsis, committee, referrals, sasts, url, state_url, status, status_date,
                  change_hash, last_fetched)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(state, bill_id) DO UPDATE SET
                  session_id=excluded.session_id, session_name=excluded.session_name,
                  number=excluded.number, title=excluded.title, synopsis=excluded.synopsis,
-                 committee=excluded.committee, referrals=excluded.referrals, url=excluded.url,
+                 committee=excluded.committee, referrals=excluded.referrals,
+                 sasts=excluded.sasts, url=excluded.url,
                  state_url=excluded.state_url, status=excluded.status,
                  status_date=excluded.status_date, change_hash=excluded.change_hash,
                  last_fetched=excluded.last_fetched""",
@@ -220,6 +251,7 @@ class Store:
                 bill.synopsis,
                 bill.committee,
                 _dumps(bill.referrals),
+                _dumps([asdict(r) for r in bill.sasts]),
                 bill.url,
                 bill.state_url,
                 bill.status,
@@ -273,7 +305,81 @@ class Store:
             session_id=r["session_id"],
             session_name=r["session_name"],
             referrals=list(_loads(r["referrals"], [])),  # type: ignore[arg-type]
+            sasts=[RelatedBill(**x) for x in _loads(r["sasts"], [])],  # type: ignore[arg-type]
         )
+
+    def cached_bill(self, state: str, bill_id: int) -> Bill | None:
+        row = self._conn.execute(
+            "SELECT * FROM bill_cache WHERE state=? AND bill_id=?", (state, bill_id)
+        ).fetchone()
+        return self._row_to_cached(row) if row else None
+
+    # -- bill texts -------------------------------------------------------- #
+    def text_doc_id(self, state: str, bill_id: int) -> int | None:
+        row = self._conn.execute(
+            "SELECT doc_id FROM bill_texts WHERE state=? AND bill_id=?", (state, bill_id)
+        ).fetchone()
+        return int(row["doc_id"]) if row else None
+
+    def save_text(
+        self,
+        state: str,
+        bill_id: int,
+        *,
+        doc_id: int,
+        version: str,
+        date: str,
+        mime: str,
+        source_url: str,
+        text: str,
+        when: str,
+    ) -> None:
+        from .texts import compress  # local import: texts.py imports Store
+
+        self._conn.execute(
+            """INSERT INTO bill_texts (state, bill_id, doc_id, version, date, mime, source_url,
+                                       chars, text_zlib, fetched_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(state, bill_id) DO UPDATE SET
+                 doc_id=excluded.doc_id, version=excluded.version, date=excluded.date,
+                 mime=excluded.mime, source_url=excluded.source_url, chars=excluded.chars,
+                 text_zlib=excluded.text_zlib, fetched_at=excluded.fetched_at""",
+            (
+                state,
+                bill_id,
+                doc_id,
+                version,
+                date,
+                mime,
+                source_url,
+                len(text),
+                compress(text),
+                when,
+            ),
+        )
+
+    def get_text(self, state: str, bill_id: int) -> dict | None:
+        """{'doc_id','version','date','mime','source_url','chars','fetched_at','text'} or None."""
+        from .texts import decompress
+
+        row = self._conn.execute(
+            "SELECT * FROM bill_texts WHERE state=? AND bill_id=?", (state, bill_id)
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["text"] = decompress(d.pop("text_zlib")) if d.get("text_zlib") else ""
+        return d
+
+    def delete_text(self, state: str, bill_id: int) -> None:
+        self._conn.execute("DELETE FROM bill_texts WHERE state=? AND bill_id=?", (state, bill_id))
+
+    def text_stats(self) -> dict:
+        row = self._conn.execute(
+            "SELECT COUNT(*) n, COALESCE(SUM(chars),0) chars, "
+            "COALESCE(SUM(LENGTH(text_zlib)),0) bytes FROM bill_texts"
+        ).fetchone()
+        return dict(row)
 
     # -- bills ------------------------------------------------------------- #
     def get_bill(self, feed: str, bill_id: int) -> TrackedBill | None:
@@ -304,6 +410,8 @@ class Store:
             sponsors=list(_loads(row["sponsors"], [])),  # type: ignore[arg-type]
             history=history,
             hearings=self.hearings_for(row["feed"], row["bill_id"]),
+            sasts=[RelatedBill(**r) for r in _loads(row["sasts"], [])],  # type: ignore[arg-type]
+            texts=[BillText(**t) for t in _loads(row["texts"], [])],  # type: ignore[arg-type]
         )
         return TrackedBill(
             bill=bill,
@@ -321,9 +429,9 @@ class Store:
             """INSERT INTO bills (
                  bill_id, feed, state, number, title, synopsis, url, state_url, status,
                  status_date, committee, change_hash, session_id, session_name, last_action,
-                 last_action_date, referrals, sponsors, history, tracked, reasons,
+                 last_action_date, referrals, sponsors, history, sasts, texts, tracked, reasons,
                  first_seen, last_updated)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(feed, bill_id) DO UPDATE SET
                  state=excluded.state, number=excluded.number, title=excluded.title,
                  synopsis=excluded.synopsis, url=excluded.url, state_url=excluded.state_url,
@@ -332,7 +440,8 @@ class Store:
                  session_id=excluded.session_id, session_name=excluded.session_name,
                  last_action=excluded.last_action, last_action_date=excluded.last_action_date,
                  referrals=excluded.referrals, sponsors=excluded.sponsors,
-                 history=excluded.history, tracked=excluded.tracked, reasons=excluded.reasons,
+                 history=excluded.history, sasts=excluded.sasts, texts=excluded.texts,
+                 tracked=excluded.tracked, reasons=excluded.reasons,
                  last_updated=excluded.last_updated""",
             (
                 bill.bill_id,
@@ -354,6 +463,8 @@ class Store:
                 _dumps(bill.referrals),
                 _dumps(bill.sponsors),
                 _dumps([asdict(a) for a in bill.history]),
+                _dumps([asdict(r) for r in bill.sasts]),
+                _dumps([asdict(t) for t in bill.texts]),
                 int(tracked),
                 _dumps(reasons),
                 when,
@@ -477,6 +588,18 @@ class Store:
             )
             for r in rows
         ]
+
+    def delete_events(
+        self, feed: str, bill_id: int, *, kind: str | None = None, unsent_only: bool = False
+    ) -> int:
+        sql = "DELETE FROM events WHERE feed=? AND bill_id=?"
+        args: list[object] = [feed, bill_id]
+        if kind:
+            sql += " AND kind=?"
+            args.append(kind)
+        if unsent_only:
+            sql += " AND sent=0"
+        return int(self._conn.execute(sql, args).rowcount)
 
     def mark_events_sent(self, ids: Iterable[int]) -> None:
         ids = list(ids)

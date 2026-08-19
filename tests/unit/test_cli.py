@@ -53,9 +53,9 @@ def test_run_with_fixtures_console(env, capsys, tmp_path, config_path, day1_dir,
     )
     assert rc == EXIT_OK
     out = capsys.readouterr().out
-    assert "Subject: [billwatch]" in out and "NEW BILLS (3)" in out
+    assert "Subject: [billwatch]" in out and "NEW BILLS (3)" in out  # HB101/SB101 pair counts once
     with Store(db) as s:
-        assert s.count_bills("md-substance-use") == 3
+        assert s.count_bills("md-substance-use") == 4
     # day 2
     rc = main(
         [
@@ -231,7 +231,7 @@ def test_max_queries_override(env, capsys, tmp_path, config_path, day1_dir, capl
             ]
         )
     assert rc == EXIT_OK
-    assert "deferring 5 candidate" in caplog.text
+    assert "deferring 6 candidate" in caplog.text
     rc = main(
         [
             *_args("backfill", config_path=config_path, db=db),
@@ -245,4 +245,4 @@ def test_max_queries_override(env, capsys, tmp_path, config_path, day1_dir, capl
     )
     assert rc == EXIT_OK
     with Store(db) as s:
-        assert s.count_bills("md-substance-use") == 3
+        assert s.count_bills("md-substance-use") == 4

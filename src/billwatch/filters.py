@@ -38,6 +38,7 @@ class MatchResult:
     excluded_by: list[str] = field(default_factory=list)
     watch_hits: list[str] = field(default_factory=list)
     search_hits: list[str] = field(default_factory=list)  # search queries that surfaced it
+    crossfile_of: list[str] = field(default_factory=list)  # matched bills this is cross-filed with
 
     @property
     def excluded(self) -> bool:
@@ -46,7 +47,9 @@ class MatchResult:
     @property
     def matched(self) -> bool:
         """Should this bill be tracked (New bills / Movement sections)?"""
-        return not self.excluded and bool(self.keyword_hits or self.search_hits)
+        return not self.excluded and bool(
+            self.keyword_hits or self.search_hits or self.crossfile_of
+        )
 
     @property
     def watch_only(self) -> bool:
@@ -58,6 +61,7 @@ class MatchResult:
         """Human-readable match reasons; committee reasons only when that is the sole signal."""
         out = [f"keyword: {k}" for k in self.keyword_hits]
         out += [f"search: {q}" for q in self.search_hits]
+        out += [f"crossfile: {n}" for n in self.crossfile_of]
         if not out:
             out += [f"committee: {c}" for c in self.watch_hits]
         return out
@@ -72,9 +76,18 @@ class FeedFilter:
         self._excludes = [(k, compile_keyword(k)) for k in feed.exclude_keywords]
         self._watch = {_norm(c): c for c in feed.watch_committees}
 
-    def evaluate(self, bill: Bill, search_hits: list[str] | None = None) -> MatchResult:
+    def evaluate(
+        self,
+        bill: Bill,
+        search_hits: list[str] | None = None,
+        crossfile_of: list[str] | None = None,
+    ) -> MatchResult:
+        """crossfile_of: numbers of already-matched bills this one is cross-filed with; a
+        cross-file of a match is itself a match (it is the same bill in the other chamber)."""
         text = f"{bill.title}\n{bill.synopsis}"
-        result = MatchResult(search_hits=list(search_hits or []))
+        result = MatchResult(
+            search_hits=list(search_hits or []), crossfile_of=list(crossfile_of or [])
+        )
         result.keyword_hits = [k for k, pat in self._keywords if pat.search(text)]
         result.excluded_by = [k for k, pat in self._excludes if pat.search(text)]
         for name in bill.committees_seen:

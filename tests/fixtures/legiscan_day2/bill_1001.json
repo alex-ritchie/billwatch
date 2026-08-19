@@ -102,7 +102,14 @@
         "sponsor_order": 1
       }
     ],
-    "sasts": [],
+    "sasts": [
+      {
+        "type_id": 5,
+        "type": "Crossfiled",
+        "sast_bill_number": "SB101",
+        "sast_bill_id": 1009
+      }
+    ],
     "subjects": [],
     "texts": [
       {
@@ -112,9 +119,20 @@
         "type_id": 1,
         "mime": "application/pdf",
         "mime_id": 2,
-        "url": "https://legiscan.com/MD/text/HB101/2026",
-        "state_link": "",
+        "url": "https://legiscan.com/MD/text/HB101/id/6001",
+        "state_link": "https://mgaleg.maryland.gov/2026RS/bills/hb/hb101f.pdf",
         "text_size": 12345
+      },
+      {
+        "doc_id": 16001,
+        "date": "2026-02-12",
+        "type": "Engrossed",
+        "type_id": 2,
+        "mime": "application/pdf",
+        "mime_id": 2,
+        "url": "https://legiscan.com/MD/text/HB101/id/16001",
+        "state_link": "https://mgaleg.maryland.gov/2026RS/bills/hb/hb101t.pdf",
+        "text_size": 22345
       }
     ],
     "votes": [],

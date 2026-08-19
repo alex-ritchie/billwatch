@@ -1,4 +1,4 @@
-"""billwatch CLI: run | dry-run | backfill | reevaluate | test-email.
+"""billwatch CLI: run | dry-run | backfill | reevaluate | fetch-texts | test-email.
 
 Exit codes: 0 ok, 1 usage/config error, 2 fetch or delivery failure (so GitHub
 Actions marks the run failed and emails you — free failure alerting).
@@ -112,11 +112,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="do not fetch full details for new matches (use cached fields; 0 queries)",
     )
     sp_re.add_argument(
+        "--refetch",
+        action="store_true",
+        help="re-fetch full detail for every tracked bill (1 query each) before reevaluating",
+    )
+    sp_re.add_argument(
+        "--no-texts",
+        action="store_true",
+        help="do not fetch bill texts for tracked bills",
+    )
+    sp_re.add_argument(
         "--session-id",
         type=int,
         default=None,
         help="cached session to reevaluate (default: newest in cache)",
     )
+
+    sp_tx = sub.add_parser(
+        "fetch-texts", help="fetch/refresh the latest full text for tracked bills (1 query each)"
+    )
+    common(sp_tx)
+    sp_tx.add_argument(
+        "--show",
+        metavar="NUMBER",
+        default=None,
+        help="print the stored text of one bill (e.g. HB1109) and exit; no fetch",
+    )
+    sp_tx.add_argument("--stats", action="store_true", help="print text storage stats and exit")
 
     sp_te = sub.add_parser("test-email", help="send a sample digest to verify SMTP settings")
     sp_te.add_argument("--config", default=DEFAULT_CONFIG)
@@ -314,9 +336,62 @@ def cmd_reevaluate(args: argparse.Namespace, settings: Settings, config: Config)
             prune=not args.no_prune,
             announce=args.announce,
             dry_run=args.dry_run,
+            refetch=args.refetch,
+            sync_text=not args.no_texts,
         )
     for r in results:
         print(format_report(r))
+    return EXIT_OK
+
+
+def cmd_fetch_texts(args: argparse.Namespace, settings: Settings, config: Config) -> int:
+    from datetime import UTC, datetime
+
+    from .texts import sync_texts
+
+    feeds = [config.feed(n) for n in args.feeds] if args.feeds else list(config.feeds.values())
+    with Store(args.db) as store:
+        if args.stats:
+            st = store.text_stats()
+            print(
+                f"{st['n']} bill text(s) stored, {st['chars']:,} chars, "
+                f"{st['bytes']:,} bytes compressed"
+            )
+            return EXIT_OK
+        if args.show:
+            want = args.show.replace(" ", "").upper()
+            for feed in feeds:
+                for tb in store.tracked_bills(feed.name):
+                    if tb.bill.number.replace(" ", "").upper() == want:
+                        t = store.get_text(feed.state, tb.bill.bill_id)
+                        if t is None:
+                            log.error("%s is tracked but has no stored text yet", want)
+                            return EXIT_FAILED
+                        print(
+                            f"# {tb.bill.number} — {tb.bill.title}\n# {t['version']} "
+                            f"({t['date']}) · {t['chars']} chars · {t['source_url']}\n"
+                        )
+                        print(t["text"])
+                        return EXIT_OK
+            log.error("%s is not a tracked bill in %s", want, [f.name for f in feeds])
+            return EXIT_USAGE
+        client = _client(settings, config, args.fixtures, args.max_queries)
+        when = datetime.now(UTC).replace(microsecond=0).isoformat()
+        for feed in feeds:
+            bills = [tb.bill for tb in store.tracked_bills(feed.name)]
+            res = sync_texts(store, client, bills, when=when)
+            store.commit()
+            log.info(
+                "[%s] texts: %d fetched, %d already current, %d failed, %d deferred (%d queries)",
+                feed.name,
+                res.fetched,
+                res.skipped,
+                res.failed,
+                res.deferred,
+                res.queries,
+            )
+        st = store.text_stats()
+        log.info("%d bill text(s) stored, %s bytes compressed", st["n"], f"{st['bytes']:,}")
     return EXIT_OK
 
 
@@ -344,6 +419,7 @@ COMMANDS = {
     "dry-run": cmd_dry_run,
     "backfill": cmd_backfill,
     "reevaluate": cmd_reevaluate,
+    "fetch-texts": cmd_fetch_texts,
     "test-email": cmd_test_email,
 }
 

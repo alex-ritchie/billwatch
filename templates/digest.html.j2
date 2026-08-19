@@ -32,15 +32,17 @@
   <h2 style="margin:0 0 8px 0;font-size:16px;border-bottom:2px solid #e4e4e7;padding-bottom:4px;">🆕 New bills ({{ new_bills|length }})</h2>
   {% for item in new_bills %}{% set b = item.bill %}
   <div style="padding:10px 0;border-bottom:1px solid #f0f0f2;">
-    <div style="font-size:15px;"><strong>{{ b.number }}</strong> — {{ b.title }}</div>
+    <div style="font-size:15px;"><strong>{{ item.numbers }}</strong>{% if item.partners %} <span style="font-size:11px;color:#71717a;">(cross-filed)</span>{% endif %} — {{ b.title }}</div>
     {% if b.synopsis %}<div style="font-size:13px;color:#3f3f46;margin-top:4px;">{{ b.synopsis|truncate(400) }}</div>{% endif %}
+    {% for x in item.bills %}
     <div style="font-size:12px;color:#52525b;margin-top:6px;">
-      Status: {{ b.status_label }}{% if b.status_date %} ({{ b.status_date }}){% endif %}
-      {% if b.committee %} · Committee: {{ b.committee }}{% endif %}
-      {% if b.sponsors %} · Sponsors: {{ b.sponsors[:3]|join(', ') }}{% if b.sponsors|length > 3 %} +{{ b.sponsors|length - 3 }}{% endif %}{% endif %}
+      {% if item.partners %}<strong>{{ x.number }}</strong> · {% endif %}Status: {{ x.status_label }}{% if x.status_date %} ({{ x.status_date }}){% endif %}
+      {% if x.committee %} · Committee: {{ x.committee }}{% endif %}
+      {% if x.sponsors %} · Sponsors: {{ x.sponsors[:3]|join(', ') }}{% if x.sponsors|length > 3 %} +{{ x.sponsors|length - 3 }}{% endif %}{% endif %}
+      · {{ bill_links(x) }}
     </div>
+    {% endfor %}
     {% if item.reasons %}<div style="font-size:12px;color:#71717a;margin-top:2px;">Matched: {{ item.reasons|join('; ') }}</div>{% endif %}
-    <div style="font-size:12px;margin-top:4px;">{{ bill_links(b) }}</div>
   </div>
   {% endfor %}
 </td></tr>
@@ -51,7 +53,7 @@
   <h2 style="margin:0 0 8px 0;font-size:16px;border-bottom:2px solid #e4e4e7;padding-bottom:4px;">🔄 Movement ({{ movement|length }})</h2>
   {% for item in movement %}{% set b = item.bill %}
   <div style="padding:10px 0;border-bottom:1px solid #f0f0f2;">
-    <div style="font-size:15px;"><strong>{{ b.number }}</strong> — {{ b.title }}</div>
+    <div style="font-size:15px;"><strong>{{ b.number }}</strong> — {{ b.title }}{% if item.partners %} <span style="font-size:11px;color:#71717a;">(cross-filed with {{ item.partners|join(', ') }})</span>{% endif %}</div>
     <div style="font-size:12px;color:#52525b;margin-top:4px;">
       {% if item.status_changed %}Status: {{ item.old_status_label }} → <strong>{{ item.new_status_label }}</strong>{% else %}Status: {{ b.status_label }}{% endif %}
       {% if item.committee_changed %} · Committee: {{ item.old_committee or '—' }} → <strong>{{ item.new_committee or '—' }}</strong>{% elif b.committee %} · Committee: {{ b.committee }}{% endif %}
@@ -75,7 +77,7 @@
     <tr>
       <td style="padding:6px 8px 6px 0;vertical-align:top;white-space:nowrap;"><strong>{{ h.date }}</strong>{% if h.time %}<br>{{ h.time }}{% endif %}</td>
       <td style="padding:6px 0;vertical-align:top;">
-        <strong>{{ b.number }}</strong> — {{ b.title|truncate(120) }}<br>
+        <strong>{{ b.number }}</strong> — {{ b.title|truncate(120) }}{% if item.partners %} <span style="font-size:11px;color:#71717a;">(cross-filed with {{ item.partners|join(', ') }})</span>{% endif %}<br>
         <span style="color:#52525b;">{{ h.committee }}{% if h.location %} · {{ h.location }}{% endif %}</span><br>
         <span style="font-size:12px;">{{ bill_links(b) }}</span>
       </td>

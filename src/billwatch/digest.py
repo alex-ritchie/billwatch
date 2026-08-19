@@ -33,6 +33,15 @@ class NewBillItem:
     bill: Bill
     reasons: list[str]
     event_id: int
+    partners: list[Bill] = field(default_factory=list)  # cross-filed companions, shown together
+
+    @property
+    def bills(self) -> list[Bill]:
+        return [self.bill, *self.partners]
+
+    @property
+    def numbers(self) -> str:
+        return " / ".join(b.number for b in self.bills)
 
 
 @dataclass
@@ -44,6 +53,7 @@ class MovementItem:
     new_committee: str | None
     actions: list[Action]
     event_id: int
+    partners: list[str] = field(default_factory=list)  # numbers of tracked cross-files
 
     @property
     def status_changed(self) -> bool:
@@ -66,6 +76,7 @@ class MovementItem:
 class HearingItem:
     bill: Bill
     hearing: Hearing
+    partners: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -177,9 +188,38 @@ def build_digest(store: Store, config: Config, feed: FeedConfig, today: date) ->
     new_ids = {i.bill.bill_id for i in digest.new_bills}
     digest.movement = [m for m in digest.movement if m.bill.bill_id not in new_ids]
 
+    # Cross-filed pairs that are both new: show once, as "HB 101 / SB 101".
+    by_id = {i.bill.bill_id: i for i in digest.new_bills}
+    merged: set[int] = set()
+    for item in list(digest.new_bills):
+        if item.bill.bill_id in merged:
+            continue
+        for rel in item.bill.crossfiles:
+            partner = by_id.get(rel.bill_id)
+            if partner is not None and partner.bill.bill_id not in merged:
+                item.partners.append(partner.bill)
+                for r in partner.reasons:
+                    if r not in item.reasons and not r.startswith("crossfile"):
+                        item.reasons.append(r)
+                merged.add(partner.bill.bill_id)
+    digest.new_bills = [i for i in digest.new_bills if i.bill.bill_id not in merged]
+
+    def tracked_partners(b: Bill) -> list[str]:
+        out = []
+        for rel in b.crossfiles:
+            tb = store.get_bill(feed.name, rel.bill_id)
+            if tb is not None and tb.tracked:
+                out.append(tb.bill.number)
+        return out
+
+    for m in digest.movement:
+        m.partners = tracked_partners(m.bill)
+
     end = today + timedelta(days=lookahead)
     for hearing, tb in store.upcoming_hearings(feed.name, today.isoformat(), end.isoformat()):
-        digest.hearings.append(HearingItem(bill=tb.bill, hearing=hearing))
+        digest.hearings.append(
+            HearingItem(bill=tb.bill, hearing=hearing, partners=tracked_partners(tb.bill))
+        )
         if digest.session_name is None and tb.bill.session_name:
             digest.session_name = tb.bill.session_name
 

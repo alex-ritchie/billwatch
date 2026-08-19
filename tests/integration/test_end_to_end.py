@@ -81,7 +81,8 @@ def test_full_daily_cycle(env, legiscan, smtp, tmp_path, config_path, day1_dir, 
     fixed = 2 + n_searches
     ops = [r["op"] for r in legiscan.requests]
     assert ops.count("getSessionList") == 1 and ops.count("getMasterListRaw") == 1
-    assert ops.count("getSearchRaw") == n_searches and ops.count("getBill") == 7
+    assert ops.count("getSearchRaw") == n_searches and ops.count("getBill") == 8
+    assert ops.count("getBillText") == 4  # latest text of each tracked bill (incl. SB101)
     assert all(r["key"] == legiscan.api_key for r in legiscan.requests)
     assert legiscan.requests[1] == {"key": "test-key", "op": "getMasterListRaw", "id": "2200"}
     # log hygiene
@@ -90,10 +91,12 @@ def test_full_daily_cycle(env, legiscan, smtp, tmp_path, config_path, day1_dir, 
     assert "2 recipient(s)" in caplog.text
     # persisted state
     con = sqlite3.connect(db)
-    assert con.execute("SELECT COUNT(*) FROM bills WHERE tracked=1").fetchone()[0] == 3
+    assert con.execute("SELECT COUNT(*) FROM bills WHERE tracked=1").fetchone()[0] == 4
     assert con.execute("SELECT COUNT(*) FROM events WHERE sent=0").fetchone()[0] == 0
+    assert con.execute("SELECT COUNT(*) FROM bill_texts").fetchone()[0] == 4
+    assert con.execute("SELECT COUNT(*) FROM bill_cache").fetchone()[0] == 8
     row = con.execute("SELECT new_bills, hearings, watch, sent, queries FROM sent_log").fetchone()
-    assert row == (3, 1, 1, 1, fixed + 7)
+    assert row == (3, 1, 1, 1, fixed + 8 + 4)  # 3 digest entries (HB101/SB101 pair is one)
     con.close()
 
     # ---- day 1 again: nothing changed → no email, only the fixed queries ----
@@ -111,7 +114,9 @@ def test_full_daily_cycle(env, legiscan, smtp, tmp_path, config_path, day1_dir, 
     assert "NEW BILLS (1)" in text and "HB600" in text
     assert "MOVEMENT (1)" in text and "Introduced -> Engrossed" in text
     assert "UPCOMING HEARINGS" in text and "2026-02-24" in text and "2026-02-25" in text
-    assert [r["op"] for r in legiscan.requests[n_before:]].count("getBill") == 3
+    day2_ops = [r["op"] for r in legiscan.requests[n_before:]]
+    assert day2_ops.count("getBill") == 3
+    assert day2_ops.count("getBillText") == 2  # HB101 Engrossed + HB600 Introduced
 
 
 def test_transient_http_errors_are_retried(env, legiscan, smtp, tmp_path, config_path):
@@ -151,8 +156,8 @@ def test_smtp_outage_keeps_state_and_catches_up(
     monkeypatch.setenv("SMTP_PORT", str(_free_port()))  # nothing listening
     assert _run("run", config_path, db, "--today", "2026-02-01") == EXIT_FAILED
     con = sqlite3.connect(db)
-    assert con.execute("SELECT COUNT(*) FROM bills WHERE tracked=1").fetchone()[0] == 3
-    assert con.execute("SELECT COUNT(*) FROM events WHERE sent=0").fetchone()[0] == 4
+    assert con.execute("SELECT COUNT(*) FROM bills WHERE tracked=1").fetchone()[0] == 4
+    assert con.execute("SELECT COUNT(*) FROM events WHERE sent=0").fetchone()[0] == 5
     assert con.execute("SELECT sent, skipped FROM sent_log").fetchone() == (0, 0)
     con.close()
     # SMTP is back the next day, and day-2 changes have landed: one combined digest
@@ -177,7 +182,7 @@ def test_smtp_rejects_one_recipient(env, tmp_path, config_path, day1_dir):
         rc = _run("run", config_path, db, "--today", "2026-02-01")
     assert rc == EXIT_FAILED
     con = sqlite3.connect(db)
-    assert con.execute("SELECT COUNT(*) FROM events WHERE sent=0").fetchone()[0] == 4
+    assert con.execute("SELECT COUNT(*) FROM events WHERE sent=0").fetchone()[0] == 5
     con.close()
 
 

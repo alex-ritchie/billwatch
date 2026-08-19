@@ -9,18 +9,18 @@ tracked bills, and no hearings in the next {{ lookahead_days }} days.
 NEW BILLS ({{ new_bills|length }})
 {{ '=' * 60 }}
 {% for item in new_bills %}{% set b = item.bill %}
-* {{ b.number }} — {{ b.title }}
-  Status: {{ b.status_label }}{% if b.status_date %} ({{ b.status_date }}){% endif %}{% if b.committee %} · Committee: {{ b.committee }}{% endif %}
+* {{ item.numbers }}{% if item.partners %} (cross-filed){% endif %} — {{ b.title }}
 {% if b.synopsis %}  {{ b.synopsis|truncate(300) }}
-{% endif %}{% if item.reasons %}  Matched: {{ item.reasons|join('; ') }}
-{% endif %}  {{ b.url }}{% if b.state_url %}
-  {{ b.state_url }}{% endif %}
-{% endfor %}{% endif %}
+{% endif %}{% for x in item.bills %}  {% if item.partners %}{{ x.number }}: {% endif %}Status: {{ x.status_label }}{% if x.status_date %} ({{ x.status_date }}){% endif %}{% if x.committee %} · Committee: {{ x.committee }}{% endif %}
+  {{ x.url }}{% if x.state_url %}
+  {{ x.state_url }}{% endif %}
+{% endfor %}{% if item.reasons %}  Matched: {{ item.reasons|join('; ') }}
+{% endif %}{% endfor %}{% endif %}
 {% if movement %}
 MOVEMENT ({{ movement|length }})
 {{ '=' * 60 }}
 {% for item in movement %}{% set b = item.bill %}
-* {{ b.number }} — {{ b.title }}
+* {{ b.number }} — {{ b.title }}{% if item.partners %} (cross-filed with {{ item.partners|join(', ') }}){% endif %}
   {% if item.status_changed %}Status: {{ item.old_status_label }} -> {{ item.new_status_label }}{% else %}Status: {{ b.status_label }}{% endif %}{% if item.committee_changed %} · Committee: {{ item.old_committee or '-' }} -> {{ item.new_committee or '-' }}{% elif b.committee %} · Committee: {{ b.committee }}{% endif %}
 {% for a in item.actions %}  - {{ a.date }} — {{ a.action }}
 {% endfor %}  {{ b.url }}
@@ -29,7 +29,7 @@ MOVEMENT ({{ movement|length }})
 UPCOMING HEARINGS — next {{ lookahead_days }} days ({{ hearings|length }})
 {{ '=' * 60 }}
 {% for item in hearings %}{% set b = item.bill %}{% set h = item.hearing %}
-* {{ h.date }}{% if h.time %} {{ h.time }}{% endif %} — {{ b.number }} — {{ b.title|truncate(100) }}
+* {{ h.date }}{% if h.time %} {{ h.time }}{% endif %} — {{ b.number }} — {{ b.title|truncate(100) }}{% if item.partners %} (cross-filed with {{ item.partners|join(', ') }}){% endif %}
   {{ h.committee }}{% if h.location %} · {{ h.location }}{% endif %}
   {{ b.url }}
 {% endfor %}{% endif %}

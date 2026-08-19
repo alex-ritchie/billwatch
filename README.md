@@ -30,11 +30,15 @@ Every run (`billwatch run`):
 3. Runs the feed's full-text searches (`getSearchRaw`) as a safety net for bills whose
    title/synopsis are vague.
 4. Applies keyword / committee rules. Matched bills are tracked; changes on tracked bills
-   become "movement"; calendar entries become hearings.
-5. Builds the digest from **all unsent events** in the DB (so a failed send is merged into
+   become "movement"; calendar entries become hearings. A matched bill's **cross-filed**
+   companion (the same bill in the other chamber — LegiScan's `sasts` links) is tracked too,
+   and the digest shows the pair as one entry ("HB 101 / SB 101").
+5. Stores the **latest full text** of every tracked bill (extracted from the PDF, compressed,
+   ~10 KB each) for later analysis — `billwatch fetch-texts --show HB1109` prints one.
+6. Builds the digest from **all unsent events** in the DB (so a failed send is merged into
    the next digest — nothing is lost) plus hearings in the next 14 days not yet announced.
-6. Sends via Gmail SMTP with recipients as BCC only, or skips if there's nothing new.
-7. The workflow commits `state/billwatch.db` back to the repo.
+7. Sends via Gmail SMTP with recipients as BCC only, or skips if there's nothing new.
+8. The workflow commits `state/billwatch.db` back to the repo.
 
 Feeds are grouped by state, so several topic feeds for one state share a single set of API
 calls.
@@ -98,7 +102,7 @@ uv run billwatch test-email --to you@example.com
 uv run billwatch run
 ```
 
-Commands: `run` · `dry-run` · `backfill` · `reevaluate` · `test-email`. Global flags:
+Commands: `run` · `dry-run` · `backfill` · `reevaluate` · `fetch-texts` · `test-email`. Global flags:
 `--env-file`, `-v`. Per-command: `--config`, `--db`, `--feed NAME` (repeatable),
 `--today YYYY-MM-DD`, `--fixtures DIR`, `--max-queries N` (override the per-run query cap;
 `0` = unlimited). Set `BILLWATCH_MAILER=console` to print digests instead of sending.
@@ -119,9 +123,26 @@ git add state/billwatch.db && git commit -m "state: reevaluate after keyword cha
 ```
 
 New matches get their full detail fetched (~1 query each, `--no-fetch` to skip); searches
-are re-run (one query per configured search term). `--no-prune` only adds/promotes and
-never removes. Tip: **quote multi-word search phrases** (`'"harm reduction"'`) — LegiScan's
-full-text search matches unquoted words independently.
+are re-run (one query per configured search term); cross-filed companions of matches are
+adopted, and companions of bills that stop matching are pruned with them. `--no-prune` only
+adds/promotes and never removes. `--refetch` re-pulls every tracked bill's detail first
+(useful after upgrades). Tip: **quote multi-word search phrases** (`'"harm reduction"'`) —
+LegiScan's full-text search matches unquoted words independently.
+
+### Bill texts
+
+Only tracked bills get text, and only the latest version (Introduced → Engrossed → Enrolled →
+Chaptered), so the committed DB stays small (~10 KB per bill compressed). Texts are fetched
+automatically by `run`/`backfill`/`reevaluate` whenever a tracked bill is new or gains a new
+version (one LegiScan `getBillText` query each; PDFs are converted with `pypdf`).
+
+```bash
+uv run billwatch fetch-texts               # (re)sync texts for all tracked bills
+uv run billwatch fetch-texts --stats       # how many, how big
+uv run billwatch fetch-texts --show HB1109 # print one bill's text
+```
+In Python: `Store(...).get_text("MD", bill_id)["text"]` — the intended hook for future
+LLM/semantic analysis (design §2.3: deliberately not built yet).
 
 Exit codes: `0` ok · `1` configuration error · `2` fetch/delivery failure (marks the
 Actions run failed).
@@ -174,6 +195,20 @@ recipients_env = "RECIPIENTS" # env var / secret holding this feed's recipient l
   (`tests/unit/test_workflow_hardening.py`).
 - If a secret ever leaks: rotate it first, rewrite history second (see design §8.5).
 
+## State DB (SQLite) at a glance
+
+| table | what | keyed by |
+|---|---|---|
+| `bills` | every matched bill per feed (+ `tracked` 1/0, match `reasons`, cross-file `sasts`, text versions) | `(feed, bill_id)` |
+| `hearings` | calendar entries for bills, with an announced flag | `(feed, bill_id, date, committee)` |
+| `events` | pending/sent digest items (`new` / `status` / `watch`) | `id` |
+| `seen` | change-detection memory: every bill's last `change_hash` | `(scope, bill_id)` |
+| `bill_cache` | filter-relevant fields for every bill ever fetched (for `reevaluate`) | `(state, bill_id)` |
+| `bill_texts` | latest full text of each tracked bill, zlib-compressed | `(state, bill_id)` |
+| `sent_log` | per-run counts incl. LegiScan queries used (quota ledger) | `(run_date, feed)` |
+
+Only public legislative data and counts — never recipients or credentials (design §8.1).
+
 ## Layout
 
 ```
@@ -183,7 +218,9 @@ config/feeds.toml              feed definitions        src/billwatch/store.py   
 templates/digest.{html,txt}.j2 email templates         src/billwatch/digest.py    digest assembly + rendering
 state/billwatch.db             committed by workflow   src/billwatch/mailer.py    SMTP / Buttondown / file
 tests/{unit,integration}       pytest                  src/billwatch/pipeline.py  the daily run
-tests/fixtures/legiscan*       recorded API responses  src/billwatch/__main__.py  CLI
+tests/fixtures/legiscan*       recorded API responses  src/billwatch/reevaluate.py offline keyword tuning
+                                                       src/billwatch/texts.py     bill text fetch/extract
+                                                       src/billwatch/__main__.py  CLI
 ```
 
 ## Roadmap

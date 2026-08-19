@@ -52,6 +52,8 @@ class LegiScanServer:
             path = d / f"masterlist_{state}.json"
         elif op == "getBill":
             path = d / f"bill_{params.get('id')}.json"
+        elif op == "getBillText":
+            path = d / f"text_{params.get('id')}.json"
         elif op == "getSearchRaw":
             path = d / f"search_{state}_{search_slug(params.get('query', ''))}.json"
             if not path.is_file():

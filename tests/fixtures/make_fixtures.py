@@ -78,6 +78,8 @@ def bill(
     referrals=None,
     sponsors=None,
     extra_hash="",
+    sasts=None,
+    texts=None,
 ):
     body = "H" if number.startswith("H") else "S"
     history = history or [
@@ -144,25 +146,106 @@ def bill(
                     "sponsor_order": 1,
                 },
             ],
-            "sasts": [],
+            "sasts": sasts or [],
             "subjects": [],
-            "texts": [
-                {
-                    "doc_id": 5000 + bill_id,
-                    "date": status_date,
-                    "type": "Introduced",
-                    "type_id": 1,
-                    "mime": "application/pdf",
-                    "mime_id": 2,
-                    "url": f"https://legiscan.com/MD/text/{number.replace(' ', '')}/2026",
-                    "state_link": "",
-                    "text_size": 12345,
-                }
-            ],
+            "texts": texts or [text_doc(bill_id, number, status_date)],
             "votes": [],
             "amendments": [],
             "supplements": [],
             "calendar": calendar or [],
+        },
+    }
+
+
+def text_doc(bill_id, number, date, kind="Introduced", suffix=""):
+    """A `texts[]` entry. doc_id = 5000 + bill_id (+ 10000 per later version)."""
+    offset = {"Introduced": 0, "Engrossed": 10000, "Enrolled": 20000, "Chaptered": 30000}[kind]
+    doc_id = 5000 + bill_id + offset
+    num = number.replace(" ", "")
+    return {
+        "doc_id": doc_id,
+        "date": date,
+        "type": kind,
+        "type_id": 1 + offset // 10000,
+        "mime": "application/pdf",
+        "mime_id": 2,
+        "url": f"https://legiscan.com/MD/text/{num}/id/{doc_id}",
+        "state_link": f"https://mgaleg.maryland.gov/2026RS/bills/{num[:2].lower()}/{num.lower()}{suffix or 'f'}.pdf",
+        "text_size": 12345 + offset,
+    }
+
+
+def crossfile(bill_id, number):
+    return {
+        "type_id": 5,
+        "type": "Crossfiled",
+        "sast_bill_number": number.replace(" ", ""),
+        "sast_bill_id": bill_id,
+    }
+
+
+def _pdf_escape(line):
+    return line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def tiny_pdf(lines):
+    """A minimal but valid single-page PDF whose text pypdf can extract."""
+    content = (
+        "BT /F1 11 Tf 40 760 Td 14 TL "
+        + " ".join(f"({_pdf_escape(ln)}) Tj T*" for ln in lines)
+        + " ET"
+    )
+    objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        "/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        f"<< /Length {len(content)} >>\nstream\n{content}\nendstream",
+    ]
+    out = "%PDF-1.4\n"
+    offsets = []
+    for i, o in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n{o}\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n"
+    for off in offsets:
+        out += f"{off:010d} 00000 n \n"
+    out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"
+    return out.encode("latin-1")
+
+
+def text_payload(b, tdoc):
+    """getBillText payload for one text version of a bill (base64 PDF, like LegiScan)."""
+    import base64
+
+    bb = b["bill"]
+    body = [
+        f"{bb['bill_number']} - {tdoc['type']} ({tdoc['date']})",
+        bb["title"],
+        "",
+        "AN ACT concerning",
+        bb["description"],
+        "",
+        "BY repealing and reenacting, with amendments, the Annotated Code of Maryland.",
+        "SECTION 1. BE IT ENACTED BY THE GENERAL ASSEMBLY OF MARYLAND, That this Act shall",
+        "take effect October 1, 2026.",
+    ]
+    pdf = tiny_pdf(body)
+    return {
+        "status": "OK",
+        "text": {
+            "doc_id": tdoc["doc_id"],
+            "bill_id": bb["bill_id"],
+            "date": tdoc["date"],
+            "type": tdoc["type"],
+            "type_id": tdoc["type_id"],
+            "mime": "application/pdf",
+            "mime_id": 2,
+            "text_size": len(pdf),
+            "text_hash": "",
+            "doc": base64.b64encode(pdf).decode(),
         },
     }
 
@@ -187,6 +270,7 @@ DAY1_BILLS = [
         "Maryland Department of Health to establish an overdose response program.",
         HGO,
         calendar=[hearing("2026-02-10", "House Health and Government Operations Hearing")],
+        sasts=[crossfile(1009, "SB 101")],
     ),
     bill(
         1002,
@@ -234,6 +318,16 @@ DAY1_BILLS = [
         "Cannabis - Taxation - Distribution of Revenue",
         "Altering the distribution of the sales and use tax revenue attributable to cannabis.",
         BT,
+    ),
+    # Senate cross-file of HB 101 with a vaguer title: no keyword hit on its own, Finance committee
+    bill(
+        1009,
+        "SB 101",
+        "Public Health - Pharmacies - Dispensing Standards",
+        "Requiring certain pharmacies to dispense certain medications without a prescription; "
+        "requiring the Department to establish a certain program.",
+        FIN,
+        sasts=[crossfile(1001, "HB 101")],
     ),
 ]
 
@@ -293,6 +387,11 @@ def write(dirpath: Path, bills, searches, search_query_names):
         (dirpath / f"search_MD_{slug}.json").write_text(
             json.dumps(searchraw(search_query_names[slug], hits, bills), indent=2) + "\n"
         )
+    for b in bills:
+        for tdoc in b["bill"]["texts"]:
+            (dirpath / f"text_{tdoc['doc_id']}.json").write_text(
+                json.dumps(text_payload(b, tdoc), indent=2) + "\n"
+            )
 
 
 NAMES = {"overdose": "overdose", "opioid": "opioid", "harm-reduction": "harm reduction"}
@@ -332,6 +431,7 @@ hb101["calendar"] = hb101["calendar"] + [
         "2026-02-24", "Senate Finance Hearing", "13:00", "3 East, Miller Senate Office Building"
     )
 ]
+hb101["texts"] = hb101["texts"] + [text_doc(1001, "HB 101", "2026-02-12", "Engrossed", "t")]
 hb101["change_hash"] = h(1001, "day2", 2, len(hb101["history"]))
 DAY2_BILLS.append(
     bill(

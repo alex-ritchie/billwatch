@@ -30,7 +30,7 @@ def test_parse_master_list(day1_dir):
     ml = parse_master_list(payload)
     assert ml.session is not None and ml.session.session_id == 2200
     assert ml.session.name == "2026 Regular Session"
-    assert len(ml.entries) == 7
+    assert len(ml.entries) == 8
     assert ml.entries[1001].number == "HB101"
     assert len(ml.entries[1001].change_hash) == 32
 

@@ -185,11 +185,13 @@ def test_day1_run_sends_digest_and_persists(store, day1_dir):
     result = run(client, store, mailer=mailer)
     assert result.ok
     r = result.feeds[FEED]
-    assert (r.new_bills, r.changed, r.watch, r.hearings_announced) == (3, 0, 1, 1)
+    # HB101, HB210, HB400 (search) + SB101 adopted as HB101's cross-file; HB300 watch-only
+    assert (r.new_bills, r.changed, r.watch, r.hearings_announced) == (4, 0, 1, 1)
     assert r.sent and not r.skipped
     # 1 sessions + 1 masterlist + 3 searches + 7 bill details
-    assert result.queries == 12 and result.candidates == 7 and result.fetched == 7
-    assert r.queries == 12
+    # 1 sessions + 1 masterlist + 3 searches + 8 details + 4 texts (one per tracked bill)
+    assert result.queries == 17 and result.candidates == 8 and result.fetched == 8
+    assert r.queries == 17
     msg, rcpts = mailer.sent[0]
     assert rcpts == ["friend@example.com"]
     assert "3 new, 1 hearing, 1 to review" in msg["Subject"]
@@ -197,13 +199,34 @@ def test_day1_run_sends_digest_and_persists(store, day1_dir):
     assert "HB101" in html and "HB210" in html and "HB400" in html and "HB300" in html
     assert "SB55" not in html and "SB120" not in html and "SB130" not in html
     # persisted state
-    assert store.count_bills(FEED) == 3
+    assert store.count_bills(FEED) == 4
     assert store.unsent_events(FEED) == []
-    assert store.seen_hashes(state_scope("MD")).keys() == {1001, 1002, 1003, 1004, 1005, 1006, 1007}
+    assert store.seen_hashes(state_scope("MD")).keys() == {
+        1001,
+        1002,
+        1003,
+        1004,
+        1005,
+        1006,
+        1007,
+        1009,
+    }
+    # cross-file adoption: SB101 tracked with the crossfile reason, no keyword of its own
+    sb101 = store.get_bill(FEED, 1009)
+    assert sb101.tracked and sb101.reasons == ["crossfile: HB101"]
+    assert [e.kind for e in store.unsent_events(FEED)] == []
+    # the pair renders as one New entry
+    assert "HB101 / SB101" in html and "cross-filed" in html
+    # texts: latest version stored for each tracked bill
+    for bid in (1001, 1003, 1006, 1009):
+        t = store.get_text("MD", bid)
+        assert t is not None and t["version"] == "Introduced" and "AN ACT concerning" in t["text"]
+    assert store.get_text("MD", 1004) is None  # watch-only: no text
     assert set(store.seen_hashes(search_scope(FEED))) == {1001, 1003, 1006}  # relevance ≥ 50 only
     assert store.upcoming_hearings(FEED, "2026-02-01", "2026-02-15") == []  # announced
     log = store.sent_log(FEED)
-    assert log[0]["sent"] == 1 and log[0]["new_bills"] == 3 and log[0]["queries"] == 12
+    # sent_log counts digest entries: the HB101/SB101 pair is one entry → 3
+    assert log[0]["sent"] == 1 and log[0]["new_bills"] == 3 and log[0]["queries"] == 17
 
 
 def test_second_run_same_data_is_quiet(store, day1_dir):
@@ -233,6 +256,13 @@ def test_day2_run_reports_movement_new_bill_and_hearings(store, day1_dir, day2_d
     result = run(FixtureClient(day2_dir), store, mailer=mailer, today=date(2026, 2, 14))
     r = result.feeds[FEED]
     assert (r.new_bills, r.changed, r.watch, r.hearings_announced) == (1, 1, 0, 2)
+    # HB101 gained an Engrossed text version → re-fetched; HB600 new → fetched
+    assert store.get_text("MD", 1001)["version"] == "Engrossed"
+    assert store.get_text("MD", 1008)["version"] == "Introduced"
+    assert (
+        "cross-filed with SB101"
+        in mailer.sent[0][0].get_body(preferencelist=("plain",)).get_content()
+    )
     # HB101 hash changed, HB300 hash changed (watch-only, text edit), HB600 new → 3 details
     assert result.fetched == 3
     text = mailer.sent[0][0].get_body(preferencelist=("plain",)).get_content()
@@ -242,7 +272,7 @@ def test_day2_run_reports_movement_new_bill_and_hearings(store, day1_dir, day2_d
     assert "Third Reading Passed (135-2)" in text
     assert "2026-02-24" in text and "2026-02-25" in text
     assert "COMMITTEE WATCH" not in text  # HB300 not re-flagged
-    assert store.count_bills(FEED) == 4
+    assert store.count_bills(FEED) == 5
 
 
 def test_send_failure_keeps_events_unsent_and_merges_next_time(store, day1_dir, day2_dir, caplog):
@@ -251,15 +281,15 @@ def test_send_failure_keeps_events_unsent_and_merges_next_time(store, day1_dir, 
     r = result.feeds[FEED]
     assert r.error and not r.sent
     # fetch state IS committed, events pending, hearings unannounced
-    assert store.count_bills(FEED) == 3
-    assert len(store.unsent_events(FEED)) == 4
+    assert store.count_bills(FEED) == 4
+    assert len(store.unsent_events(FEED)) == 5
     assert store.sent_log(FEED)[0]["sent"] == 0 and store.sent_log(FEED)[0]["skipped"] == 0
     # next day works: everything from day 1 plus day 2 changes in one digest
     mailer = RecordingMailer()
     result2 = run(FixtureClient(day2_dir), store, mailer=mailer, today=date(2026, 2, 14))
     assert result2.ok
     text = mailer.sent[0][0].get_body(preferencelist=("plain",)).get_content()
-    assert "NEW BILLS (4)" in text  # HB101, HB210, HB400 (day 1) + HB600
+    assert "NEW BILLS (4)" in text  # HB101/SB101 (one entry), HB210, HB400 (day 1) + HB600
     assert "MOVEMENT" not in text  # HB101 is new-and-moved → folded into New
     assert "COMMITTEE WATCH (1)" in text
     assert store.unsent_events(FEED) == []
@@ -287,7 +317,7 @@ def test_fetch_failure_rolls_back_and_reports(store, day1_dir):
     assert store.seen_hashes(state_scope("MD")) == {}
     # a healthy run afterwards catches everything up
     result = run(FixtureClient(day1_dir), store, mailer=mailer)
-    assert result.ok and result.feeds[FEED].new_bills == 3
+    assert result.ok and result.feeds[FEED].new_bills == 4
 
 
 def test_query_budget_defers_candidates_to_next_run(store, day1_dir, caplog):
@@ -296,13 +326,13 @@ def test_query_budget_defers_candidates_to_next_run(store, day1_dir, caplog):
     with caplog.at_level(logging.WARNING):
         result = run(FixtureClient(day1_dir, max_queries=8), store, mailer=mailer)
     assert result.ok
-    assert result.fetched == 3 and result.deferred == 4
-    assert "deferring 4 candidate" in caplog.text
+    assert result.fetched == 3 and result.deferred == 5
+    assert "deferring 5 candidate" in caplog.text
     assert len(store.seen_hashes(state_scope("MD"))) == 3
     # next run (with budget) picks up the remaining four
     result = run(FixtureClient(day1_dir), store, mailer=mailer, today=date(2026, 2, 2))
-    assert result.fetched == 4 and result.deferred == 0
-    assert store.count_bills(FEED) == 3
+    assert result.fetched == 5 and result.deferred == 0
+    assert store.count_bills(FEED) == 4
     assert len(mailer.sent) == 2
 
 
@@ -311,7 +341,7 @@ def test_backfill_records_without_sending(store, day1_dir):
     result = run(FixtureClient(day1_dir), store, mailer=None, announce=False)
     r = result.feeds[FEED]
     assert r.skipped and not r.sent and mailer.sent == []
-    assert store.count_bills(FEED) == 3
+    assert store.count_bills(FEED) == 4
     assert store.unsent_events(FEED) == []
     # hearings are left unannounced so the first real digest still lists what's coming
     assert len(store.upcoming_hearings(FEED, "2026-02-01", "2026-02-15")) == 1
@@ -325,7 +355,7 @@ def test_dry_run_mailer_none_marks_nothing(store, day1_dir):
     result = run(FixtureClient(day1_dir), store, mailer=None)
     r = result.feeds[FEED]
     assert r.digest is not None and not r.sent and not r.skipped
-    assert len(store.unsent_events(FEED)) == 4  # nothing consumed
+    assert len(store.unsent_events(FEED)) == 5  # nothing consumed
 
 
 def test_pinned_session_and_search_hits_outside_masterlist(store, day1_dir):
@@ -334,7 +364,8 @@ def test_pinned_session_and_search_hits_outside_masterlist(store, day1_dir):
     client = FixtureClient(day1_dir)
     result = run(client, store, config=cfg, mailer=RecordingMailer())
     assert result.ok
-    assert result.queries == 1 + 1 + 7  # masterlist + search + details (no session list)
+    # masterlist + search + 8 details + 4 texts (no session list)
+    assert result.queries == 1 + 1 + 8 + 4
 
 
 def test_multiple_feeds_same_state_share_fetches(store, day1_dir):
@@ -363,8 +394,9 @@ def test_multiple_feeds_same_state_share_fetches(store, day1_dir):
     mailer = RecordingMailer()
     result = run(client := FixtureClient(day1_dir), store, config=cfg, mailer=mailer)
     assert result.ok
-    assert client.query_count == 1 + 1 + 7  # details fetched once for both feeds
-    assert result.feeds["md-substance-use"].new_bills == 2  # HB101, HB210 (no search net here)
+    # 8 details fetched once for both feeds; texts: 3 (substance: HB101, HB210, SB101) + 1 (SB120)
+    assert client.query_count == 1 + 1 + 8 + 4
+    assert result.feeds["md-substance-use"].new_bills == 3  # HB101, HB210 + SB101 cross-file
     assert result.feeds["md-vehicles"].new_bills == 1  # SB120
     assert len(mailer.sent) == 2
     assert store.count_bills("md-vehicles") == 1

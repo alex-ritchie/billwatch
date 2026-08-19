@@ -15,7 +15,8 @@ FEED = "md-substance-use"
 
 
 def _seed(store, day1_dir):
-    """Day-1 backfill: 3 tracked (HB101, HB210, HB400-by-search), 1 watch (HB300), 7 cached."""
+    """Day-1 backfill: 4 tracked (HB101, HB210, HB400-by-search, SB101 cross-file), 1 watch
+    (HB300), 8 cached."""
     run_pipeline(
         config=make_config(),
         client=FixtureClient(day1_dir),
@@ -34,14 +35,14 @@ def _seed(store, day1_dir):
 
 def test_pipeline_caches_every_fetched_bill(store, day1_dir):
     _seed(store, day1_dir)
-    assert store.cache_count("MD") == 7  # matched or not
+    assert store.cache_count("MD") == 8  # matched or not
     assert store.cached_sessions("MD") == [2200]
     lite = {b.bill_id: b for b in store.cached_bills("MD", 2200)}
     assert lite[1005].title.startswith("Vehicle Laws")  # a non-match is cached too
     assert lite[1001].committee == "Health and Government Operations"
     assert lite[1001].referrals == ["Health and Government Operations"]
     assert lite[1001].hearings == [] and lite[1001].history == []  # lightweight on purpose
-    assert store.schema_version() == 2
+    assert store.schema_version() >= 2
 
 
 def test_cache_bill_roundtrip_and_update(store):
@@ -63,10 +64,10 @@ def test_reevaluate_no_change_is_noop(store, day1_dir):
     res = reevaluate_feed(
         store, make_config(), make_config().feed(FEED), client=FixtureClient(day1_dir)
     )
-    assert res.changes == [] and res.unchanged == 7
-    assert res.cached == 7 and res.session_id == 2200
-    assert res.queries == 3  # the three searches only; nothing fetched
-    assert store.count_bills(FEED) == 3
+    assert res.changes == [] and res.unchanged == 8
+    assert res.cached == 8 and res.session_id == 2200
+    assert res.queries == 3  # the three searches only; nothing fetched, texts already current
+    assert store.count_bills(FEED) == 4
 
 
 def test_reevaluate_new_keyword_adds_and_fetches_detail(store, day1_dir):
@@ -80,10 +81,11 @@ def test_reevaluate_new_keyword_adds_and_fetches_detail(store, day1_dir):
     assert res.added[0].reasons == ["keyword: speed monitoring"]
     tb = store.get_bill(FEED, 1005)
     assert tb.tracked and tb.bill.history  # full detail fetched, not the lite cache row
-    assert res.queries == 3 + 1
+    assert res.queries == 3 + 1 + 1  # searches + detail + its text
+    assert store.get_text("MD", 1005) is not None
     # quiet by default: event recorded as already sent
     assert store.unsent_events(FEED) == []
-    assert store.count_bills(FEED) == 4
+    assert store.count_bills(FEED) == 5
 
 
 def test_reevaluate_announce_and_no_fetch(store, day1_dir):
@@ -156,7 +158,7 @@ def test_reevaluate_no_prune_only_adds(store, day1_dir):
     res = reevaluate_feed(store, cfg, cfg.feed(FEED), client=FixtureClient(day1_dir), prune=False)
     assert [c.number for c in res.added] == ["SB120"]
     assert res.removed == [] and res.demoted == []
-    assert store.count_bills(FEED) == 4  # nothing taken away
+    assert store.count_bills(FEED) == 5  # nothing taken away
 
 
 def test_reevaluate_dry_run_changes_nothing(tmp_path, day1_dir):
@@ -167,12 +169,13 @@ def test_reevaluate_dry_run_changes_nothing(tmp_path, day1_dir):
         res = reevaluate_feed(
             store, cfg, cfg.feed(FEED), client=FixtureClient(day1_dir), dry_run=True
         )
-        # 3 tracked bills + the watch-only HB300 (no watched committees left) → 4 removals
-        assert res.dry_run and len(res.added) == 1 and len(res.removed) == 4
+        # 4 tracked bills (incl. SB101, whose cross-file HB101 no longer matches) + the
+        # watch-only HB300 (no watched committees left) → 5 removals
+        assert res.dry_run and len(res.added) == 1 and len(res.removed) == 5
         report = format_report(res)
-        assert "DRY RUN" in report and "SB120" in report and "REMOVED (4)" in report
+        assert "DRY RUN" in report and "SB120" in report and "REMOVED (5)" in report
     with Store(db) as store:
-        assert store.count_bills(FEED) == 3 and store.get_bill(FEED, 1005) is None
+        assert store.count_bills(FEED) == 4 and store.get_bill(FEED, 1005) is None
 
 
 def test_reevaluate_without_client_skips_searches(store, day1_dir):

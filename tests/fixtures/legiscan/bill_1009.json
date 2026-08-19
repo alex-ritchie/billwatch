@@ -1,0 +1,104 @@
+{
+  "status": "OK",
+  "bill": {
+    "bill_id": 1009,
+    "change_hash": "ae5583e8f1edd2d633a882dce6feeeca",
+    "session_id": 2200,
+    "session": {
+      "session_id": 2200,
+      "state_id": 21,
+      "year_start": 2026,
+      "year_end": 2026,
+      "prefile": 0,
+      "sine_die": 0,
+      "prior": 0,
+      "special": 0,
+      "session_tag": "Regular Session",
+      "session_title": "2026 Regular Session",
+      "session_name": "2026 Regular Session"
+    },
+    "url": "https://legiscan.com/MD/bill/SB101/2026",
+    "state_link": "https://mgaleg.maryland.gov/mgawebsite/Legislation/Details/sb101?ys=2026RS",
+    "completed": 0,
+    "status": 1,
+    "status_date": "2026-01-14",
+    "progress": [
+      {
+        "date": "2026-01-14",
+        "event": 1
+      }
+    ],
+    "state": "MD",
+    "state_id": 21,
+    "bill_number": "SB101",
+    "bill_type": "B",
+    "bill_type_id": 1,
+    "body": "S",
+    "body_id": 2,
+    "current_body": "S",
+    "current_body_id": 2,
+    "title": "Public Health - Pharmacies - Dispensing Standards",
+    "description": "Requiring certain pharmacies to dispense certain medications without a prescription; requiring the Department to establish a certain program.",
+    "pending_committee_id": 2,
+    "committee": {
+      "committee_id": 2,
+      "chamber": "S",
+      "chamber_id": 2,
+      "name": "Finance"
+    },
+    "referrals": [
+      {
+        "date": "2026-01-14",
+        "committee_id": 2,
+        "chamber": "S",
+        "chamber_id": 2,
+        "name": "Finance"
+      }
+    ],
+    "history": [
+      {
+        "date": "2026-01-14",
+        "action": "First Reading Finance",
+        "chamber": "S",
+        "chamber_id": 2,
+        "importance": 1
+      }
+    ],
+    "sponsors": [
+      {
+        "people_id": 901,
+        "party": "D",
+        "role": "Sen",
+        "name": "Delegate Baker",
+        "sponsor_type_id": 1,
+        "sponsor_order": 1
+      }
+    ],
+    "sasts": [
+      {
+        "type_id": 5,
+        "type": "Crossfiled",
+        "sast_bill_number": "HB101",
+        "sast_bill_id": 1001
+      }
+    ],
+    "subjects": [],
+    "texts": [
+      {
+        "doc_id": 6009,
+        "date": "2026-01-14",
+        "type": "Introduced",
+        "type_id": 1,
+        "mime": "application/pdf",
+        "mime_id": 2,
+        "url": "https://legiscan.com/MD/text/SB101/id/6009",
+        "state_link": "https://mgaleg.maryland.gov/2026RS/bills/sb/sb101f.pdf",
+        "text_size": 12345
+      }
+    ],
+    "votes": [],
+    "amendments": [],
+    "supplements": [],
+    "calendar": []
+  }
+}

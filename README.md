@@ -55,6 +55,13 @@ Gmail account with 2-step verification (for an *app password*). A dedicated Gmai
    | `SMTP_APP_PASSWORD` | a Gmail app password (Google Account → Security → App passwords) |
    | `SMTP_FROM` | (optional) From address, defaults to `SMTP_USERNAME` |
    | `RECIPIENTS` | comma-separated recipient addresses; BCC'd |
+   | `BUTTONDOWN_API_KEY` | (Phase 3 only) Buttondown API token |
+
+   Optional non-secret settings go on the **Variables** tab of the same page and can be
+   left unset: `SMTP_HOST` (default `smtp.gmail.com`), `SMTP_PORT` (`587`),
+   `BILLWATCH_MAILER` (`smtp` | `buttondown` | `console`). Only the first five secrets are
+   needed for v1; the workflow forwards all of these so changing one later is a settings
+   edit, not a code change.
 
 3. **Edit [`config/feeds.toml`](config/feeds.toml)** — keywords, searches, watched
    committees. Adding a state/topic is another `[feeds.<name>]` block.

@@ -36,12 +36,23 @@ jobs:
 
       - name: Run billwatch
         id: run
+        # Every runtime setting billwatch reads, wired up once. Unset values arrive as ""
+        # and the code falls back to its defaults, so only the first five are required.
+        #   Secrets   → Settings → Secrets and variables → Actions → Secrets
+        #   Variables → same page → Variables tab (plain text; fine for non-secret settings)
         env:
-          LEGISCAN_API_KEY:  ${{ secrets.LEGISCAN_API_KEY }}
-          SMTP_USERNAME:     ${{ secrets.SMTP_USERNAME }}
-          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
-          SMTP_FROM:         ${{ secrets.SMTP_FROM }}
-          RECIPIENTS:        ${{ secrets.RECIPIENTS }}   # comma-separated, BCC'd, never logged
+          # --- required (secrets) ---
+          LEGISCAN_API_KEY:   ${{ secrets.LEGISCAN_API_KEY }}
+          SMTP_USERNAME:      ${{ secrets.SMTP_USERNAME }}
+          SMTP_APP_PASSWORD:  ${{ secrets.SMTP_APP_PASSWORD }}
+          SMTP_FROM:          ${{ secrets.SMTP_FROM }}      # optional; defaults to SMTP_USERNAME
+          RECIPIENTS:         ${{ secrets.RECIPIENTS }}     # comma-separated, BCC'd, never logged
+          # --- optional (variables; defaults: smtp.gmail.com / 587 / smtp) ---
+          SMTP_HOST:          ${{ vars.SMTP_HOST }}
+          SMTP_PORT:          ${{ vars.SMTP_PORT }}
+          BILLWATCH_MAILER:   ${{ vars.BILLWATCH_MAILER }}  # smtp | buttondown | console
+          # --- Phase 3 (secret; only used when BILLWATCH_MAILER=buttondown) ---
+          BUTTONDOWN_API_KEY: ${{ secrets.BUTTONDOWN_API_KEY }}
         run: uv run --frozen --no-dev billwatch --env-file "" run --config config/feeds.toml --db state/billwatch.db
 
       # Persist even if delivery failed: fetched state is committed and unsent events are

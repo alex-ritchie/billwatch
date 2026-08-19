@@ -208,3 +208,41 @@ def test_env_file_is_loaded(monkeypatch, tmp_path, config_path, day1_dir, capsys
     assert rc == EXIT_OK and "Subject:" in capsys.readouterr().out
     for k in ("BILLWATCH_MAILER", "RECIPIENTS", "SMTP_FROM"):
         monkeypatch.delenv(k, raising=False)
+
+
+def test_max_queries_override(env, capsys, tmp_path, config_path, day1_dir, caplog):
+    """--max-queries raises/lowers the per-run budget for one run; 0 means unlimited."""
+    import logging
+
+    from billwatch.config import load_config
+
+    fixed = 2 + len(load_config(config_path).feed("md-substance-use").searches)
+    db = tmp_path / "bw.db"
+    with caplog.at_level(logging.WARNING):
+        rc = main(
+            [
+                *_args("backfill", config_path=config_path, db=db),
+                "--fixtures",
+                str(day1_dir),
+                "--today",
+                "2026-01-20",
+                "--max-queries",
+                str(fixed + 2),  # room for exactly 2 of the 7 detail fetches
+            ]
+        )
+    assert rc == EXIT_OK
+    assert "deferring 5 candidate" in caplog.text
+    rc = main(
+        [
+            *_args("backfill", config_path=config_path, db=db),
+            "--fixtures",
+            str(day1_dir),
+            "--today",
+            "2026-01-21",
+            "--max-queries",
+            "0",
+        ]
+    )
+    assert rc == EXIT_OK
+    with Store(db) as s:
+        assert s.count_bills("md-substance-use") == 3

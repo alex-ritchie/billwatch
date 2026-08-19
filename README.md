@@ -68,10 +68,11 @@ Gmail account with 2-step verification (for an *app password*). A dedicated Gmai
 4. **Enable GitHub features**: Actions (allow workflows), *push protection + secret
    scanning* (Settings → Code security), branch protection on `main` (no force-push), and
    Dependabot (already configured in [`.github/dependabot.yml`](.github/dependabot.yml)).
-5. **Seed the state** so the first digest isn't a 300-bill wall: run the workflow once via
-   *Actions → daily-digest → Run workflow*. Or, locally: `billwatch backfill` and commit
-   `state/billwatch.db`. (Without a backfill, the first run simply reports everything
-   currently in the session as "new" — acceptable out of session.)
+5. **Seed the state** so the first digest isn't a 300-bill wall: locally,
+   `uv run billwatch backfill --max-queries 0` (one query per bill in the current session —
+   ~2,700 for a Maryland session, a one-time cost), then commit `state/billwatch.db`. This
+   also fills the bill cache that `reevaluate` uses for keyword tuning. (Without a backfill,
+   the first scheduled run reports everything currently in the session as "new".)
 6. Digests arrive daily at ~07:30 ET. GitHub emails you if a run fails.
 
 To swap maintainers: fork, re-add the five secrets, done.
@@ -97,9 +98,30 @@ uv run billwatch test-email --to you@example.com
 uv run billwatch run
 ```
 
-Commands: `run` · `dry-run` · `backfill` · `test-email`. Global flags: `--env-file`,
-`-v`. Per-command: `--config`, `--db`, `--feed NAME` (repeatable), `--today YYYY-MM-DD`,
-`--fixtures DIR`. Set `BILLWATCH_MAILER=console` to print digests instead of sending.
+Commands: `run` · `dry-run` · `backfill` · `reevaluate` · `test-email`. Global flags:
+`--env-file`, `-v`. Per-command: `--config`, `--db`, `--feed NAME` (repeatable),
+`--today YYYY-MM-DD`, `--fixtures DIR`, `--max-queries N` (override the per-run query cap;
+`0` = unlimited). Set `BILLWATCH_MAILER=console` to print digests instead of sending.
+
+### Tuning keywords (the M3 loop)
+
+The daily run only re-evaluates a bill when LegiScan's `change_hash` changes, so editing
+`feeds.toml` would not, by itself, touch the bills already seen. Every fetched bill's
+filter-relevant fields are therefore kept in a small `bill_cache` table, and
+`reevaluate` re-applies the current rules to it — offline, in seconds:
+
+```bash
+# edit config/feeds.toml (keywords / searches / watch_committees / exclude_keywords), then:
+uv run billwatch reevaluate --dry-run     # preview: added / promoted / demoted / removed
+uv run billwatch reevaluate               # apply (quietly — nothing lands in the next digest)
+uv run billwatch reevaluate --announce    # ...or surface the additions in the next digest
+git add state/billwatch.db && git commit -m "state: reevaluate after keyword change"
+```
+
+New matches get their full detail fetched (~1 query each, `--no-fetch` to skip); searches
+are re-run (one query per configured search term). `--no-prune` only adds/promotes and
+never removes. Tip: **quote multi-word search phrases** (`'"harm reduction"'`) — LegiScan's
+full-text search matches unquoted words independently.
 
 Exit codes: `0` ok · `1` configuration error · `2` fetch/delivery failure (marks the
 Actions run failed).
@@ -130,8 +152,9 @@ recipients_env = "RECIPIENTS" # env var / secret holding this feed's recipient l
 ## Operations notes
 
 - **Quota.** Free tier is 30,000 queries/month. Every run logs its query count and the
-  `sent_log` table records it per day. Typical: 5 queries/day out of session, well under
-  200/day at peak. `max_queries_per_run` is a hard stop; deferred bills are picked up next run.
+  `sent_log` table records it per day. Typical: ~6 queries/day out of session, well under
+  200/day at peak. `max_queries_per_run` is a hard stop (`--max-queries` overrides it for one
+  run); deferred bills are picked up next run.
 - **Session rollover.** Each run picks the newest non-prior regular session automatically.
   Pin `session_id` in a feed if you need a special session or an older one.
 - **DB in the repo.** `state/billwatch.db` is small (public legislative data + counts). The

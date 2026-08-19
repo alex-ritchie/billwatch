@@ -258,6 +258,7 @@ def fetch_state(
             )
             break
         fetched += 1
+        store.cache_bill(bill, when)
         for feed in feeds:
             process_bill(
                 store,

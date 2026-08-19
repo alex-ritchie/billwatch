@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .models import Action, Bill, DigestEvent, Hearing, TrackedBill
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -64,6 +64,28 @@ CREATE TABLE IF NOT EXISTS hearings (
   kind          TEXT,
   announced_in_digest INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (feed, bill_id, date, committee)
+);
+
+-- Lightweight copy of the fields the filters need, for EVERY bill ever fetched (matched or
+-- not). Lets `billwatch reevaluate` apply keyword/search changes offline without re-fetching
+-- a whole session. ~1 KB per bill.
+CREATE TABLE IF NOT EXISTS bill_cache (
+  state         TEXT    NOT NULL,
+  bill_id       INTEGER NOT NULL,
+  session_id    INTEGER,
+  session_name  TEXT,
+  number        TEXT,
+  title         TEXT,
+  synopsis      TEXT,
+  committee     TEXT,
+  referrals     TEXT,      -- JSON list
+  url           TEXT,
+  state_url     TEXT,
+  status        INTEGER,
+  status_date   TEXT,
+  change_hash   TEXT,
+  last_fetched  TEXT,
+  PRIMARY KEY (state, bill_id)
 );
 
 CREATE TABLE IF NOT EXISTS seen (
@@ -127,10 +149,15 @@ class Store:
     def _init_schema(self) -> None:
         self._conn.executescript(_SCHEMA)
         self._conn.execute(
-            "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
+            """INSERT INTO meta (key, value) VALUES ('schema_version', ?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
             (str(SCHEMA_VERSION),),
         )
         self._conn.commit()
+
+    def schema_version(self) -> int:
+        row = self._conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        return int(row["value"]) if row else 0
 
     def commit(self) -> None:
         self._conn.commit()
@@ -167,6 +194,85 @@ class Store:
                ON CONFLICT(scope, bill_id) DO UPDATE SET
                  change_hash=excluded.change_hash, last_checked=excluded.last_checked""",
             (scope, bill_id, change_hash, when),
+        )
+
+    # -- bill cache (filter-relevant fields for every fetched bill) --------- #
+    def cache_bill(self, bill: Bill, when: str) -> None:
+        self._conn.execute(
+            """INSERT INTO bill_cache (state, bill_id, session_id, session_name, number, title,
+                 synopsis, committee, referrals, url, state_url, status, status_date,
+                 change_hash, last_fetched)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(state, bill_id) DO UPDATE SET
+                 session_id=excluded.session_id, session_name=excluded.session_name,
+                 number=excluded.number, title=excluded.title, synopsis=excluded.synopsis,
+                 committee=excluded.committee, referrals=excluded.referrals, url=excluded.url,
+                 state_url=excluded.state_url, status=excluded.status,
+                 status_date=excluded.status_date, change_hash=excluded.change_hash,
+                 last_fetched=excluded.last_fetched""",
+            (
+                bill.state,
+                bill.bill_id,
+                bill.session_id,
+                bill.session_name,
+                bill.number,
+                bill.title,
+                bill.synopsis,
+                bill.committee,
+                _dumps(bill.referrals),
+                bill.url,
+                bill.state_url,
+                bill.status,
+                bill.status_date,
+                bill.change_hash,
+                when,
+            ),
+        )
+
+    def cached_bills(self, state: str, session_id: int | None = None) -> list[Bill]:
+        """Lightweight Bills (no history/hearings/sponsors) from the cache, oldest id first."""
+        sql = "SELECT * FROM bill_cache WHERE state=?"
+        args: list[object] = [state]
+        if session_id is not None:
+            sql += " AND session_id=?"
+            args.append(session_id)
+        rows = self._conn.execute(sql + " ORDER BY bill_id", args).fetchall()
+        return [self._row_to_cached(r) for r in rows]
+
+    def cached_sessions(self, state: str) -> list[int]:
+        rows = self._conn.execute(
+            "SELECT DISTINCT session_id FROM bill_cache WHERE state=? AND session_id IS NOT NULL "
+            "ORDER BY session_id",
+            (state,),
+        ).fetchall()
+        return [int(r["session_id"]) for r in rows]
+
+    def cache_count(self, state: str | None = None) -> int:
+        if state is None:
+            return int(self._conn.execute("SELECT COUNT(*) FROM bill_cache").fetchone()[0])
+        return int(
+            self._conn.execute(
+                "SELECT COUNT(*) FROM bill_cache WHERE state=?", (state,)
+            ).fetchone()[0]
+        )
+
+    @staticmethod
+    def _row_to_cached(r: sqlite3.Row) -> Bill:
+        return Bill(
+            bill_id=r["bill_id"],
+            state=r["state"],
+            number=r["number"] or "",
+            title=r["title"] or "",
+            synopsis=r["synopsis"] or "",
+            url=r["url"] or "",
+            state_url=r["state_url"] or "",
+            status=r["status"],
+            status_date=r["status_date"],
+            committee=r["committee"],
+            change_hash=r["change_hash"] or "",
+            session_id=r["session_id"],
+            session_name=r["session_name"],
+            referrals=list(_loads(r["referrals"], [])),  # type: ignore[arg-type]
         )
 
     # -- bills ------------------------------------------------------------- #
@@ -255,6 +361,12 @@ class Store:
             ),
         )
 
+    def delete_bill(self, feed: str, bill_id: int) -> None:
+        """Remove a bill from a feed along with its hearings and pending/sent events."""
+        self._conn.execute("DELETE FROM hearings WHERE feed=? AND bill_id=?", (feed, bill_id))
+        self._conn.execute("DELETE FROM events WHERE feed=? AND bill_id=?", (feed, bill_id))
+        self._conn.execute("DELETE FROM bills WHERE feed=? AND bill_id=?", (feed, bill_id))
+
     def tracked_bills(self, feed: str, *, tracked_only: bool = True) -> list[TrackedBill]:
         sql = "SELECT * FROM bills WHERE feed=?"
         if tracked_only:
@@ -341,10 +453,12 @@ class Store:
             )
 
     # -- events (pending digest items) ------------------------------------- #
-    def add_event(self, feed: str, bill_id: int, kind: str, detail: dict, when: str) -> int:
+    def add_event(
+        self, feed: str, bill_id: int, kind: str, detail: dict, when: str, *, sent: bool = False
+    ) -> int:
         cur = self._conn.execute(
-            "INSERT INTO events (feed, bill_id, kind, detail, created) VALUES (?,?,?,?,?)",
-            (feed, bill_id, kind, _dumps(detail), when),
+            "INSERT INTO events (feed, bill_id, kind, detail, created, sent) VALUES (?,?,?,?,?,?)",
+            (feed, bill_id, kind, _dumps(detail), when, int(sent)),
         )
         return int(cur.lastrowid)
 

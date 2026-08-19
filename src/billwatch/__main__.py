@@ -1,4 +1,4 @@
-"""billwatch CLI: run | dry-run | backfill | test-email.
+"""billwatch CLI: run | dry-run | backfill | reevaluate | test-email.
 
 Exit codes: 0 ok, 1 usage/config error, 2 fetch or delivery failure (so GitHub
 Actions marks the run failed and emails you — free failure alerting).
@@ -62,6 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument(
             "--today", type=_parse_date, default=None, help="override the run date (YYYY-MM-DD)"
         )
+        sp.add_argument(
+            "--max-queries",
+            type=int,
+            default=None,
+            metavar="N",
+            help="override settings.max_queries_per_run for this run "
+            "(e.g. raise it for a one-time backfill; 0 = unlimited)",
+        )
         if fixtures:
             sp.add_argument(
                 "--fixtures",
@@ -80,6 +88,36 @@ def build_parser() -> argparse.ArgumentParser:
     sp_bf = sub.add_parser("backfill", help="seed the state DB without sending a digest")
     common(sp_bf)
 
+    sp_re = sub.add_parser(
+        "reevaluate",
+        help="re-apply the current feeds.toml rules to already-fetched bills (keyword tuning)",
+    )
+    common(sp_re)
+    sp_re.add_argument(
+        "--dry-run", action="store_true", help="report what would change, save nothing"
+    )
+    sp_re.add_argument(
+        "--announce",
+        action="store_true",
+        help="put resulting new/watch items in the next digest (default: quiet)",
+    )
+    sp_re.add_argument(
+        "--no-prune",
+        action="store_true",
+        help="only add/promote; never demote or remove bills that stopped matching",
+    )
+    sp_re.add_argument(
+        "--no-fetch",
+        action="store_true",
+        help="do not fetch full details for new matches (use cached fields; 0 queries)",
+    )
+    sp_re.add_argument(
+        "--session-id",
+        type=int,
+        default=None,
+        help="cached session to reevaluate (default: newest in cache)",
+    )
+
     sp_te = sub.add_parser("test-email", help="send a sample digest to verify SMTP settings")
     sp_te.add_argument("--config", default=DEFAULT_CONFIG)
     sp_te.add_argument(
@@ -96,8 +134,14 @@ def build_parser() -> argparse.ArgumentParser:
 # --------------------------------------------------------------------------- #
 
 
-def _client(settings: Settings, config: Config, fixtures: str | None) -> BillSource:
-    budget = config.settings.max_queries_per_run
+def _client(
+    settings: Settings, config: Config, fixtures: str | None, max_queries: int | None = None
+) -> BillSource:
+    budget: int | None = (
+        max_queries if max_queries is not None else config.settings.max_queries_per_run
+    )
+    if budget is not None and budget <= 0:
+        budget = None  # 0 or negative → unlimited
     if fixtures:
         return FixtureClient(fixtures, max_queries=budget)
     if not settings.legiscan_api_key:
@@ -184,7 +228,7 @@ def sample_digest(config: Config, feed: FeedConfig, today: date) -> Digest:
 
 def cmd_run(args: argparse.Namespace, settings: Settings, config: Config) -> int:
     today = args.today or date.today()
-    client = _client(settings, config, args.fixtures)
+    client = _client(settings, config, args.fixtures, args.max_queries)
     mailer: Mailer = make_mailer(settings)
     with Store(args.db) as store:
         run = run_pipeline(
@@ -203,7 +247,7 @@ def cmd_run(args: argparse.Namespace, settings: Settings, config: Config) -> int
 
 def cmd_dry_run(args: argparse.Namespace, settings: Settings, config: Config) -> int:
     today = args.today or date.today()
-    client = _client(settings, config, args.fixtures)
+    client = _client(settings, config, args.fixtures, args.max_queries)
     out = FileMailer(args.out)
     with _memory_copy(args.db) as store:
         run = run_pipeline(
@@ -230,7 +274,7 @@ def cmd_dry_run(args: argparse.Namespace, settings: Settings, config: Config) ->
 
 def cmd_backfill(args: argparse.Namespace, settings: Settings, config: Config) -> int:
     today = args.today or date.today()
-    client = _client(settings, config, args.fixtures)
+    client = _client(settings, config, args.fixtures, args.max_queries)
     with Store(args.db) as store:
         run = run_pipeline(
             config=config,
@@ -247,6 +291,33 @@ def cmd_backfill(args: argparse.Namespace, settings: Settings, config: Config) -
             log.info("[%s] backfill: %d tracked bill(s) in store", name, store.count_bills(name))
     _report(run)
     return EXIT_OK if run.ok else EXIT_FAILED
+
+
+def cmd_reevaluate(args: argparse.Namespace, settings: Settings, config: Config) -> int:
+    from .reevaluate import format_report, reevaluate
+
+    # API access is optional here: without a key we can still re-run keyword/committee rules.
+    client: BillSource | None
+    try:
+        client = _client(settings, config, args.fixtures, args.max_queries)
+    except ConfigError:
+        client = None
+        log.warning("LEGISCAN_API_KEY not set: searches skipped and new matches use cached fields")
+    with Store(args.db) as store:
+        results = reevaluate(
+            store,
+            config,
+            client=client,
+            feed_names=args.feeds,
+            session_id=args.session_id,
+            fetch_details=not args.no_fetch,
+            prune=not args.no_prune,
+            announce=args.announce,
+            dry_run=args.dry_run,
+        )
+    for r in results:
+        print(format_report(r))
+    return EXIT_OK
 
 
 def cmd_test_email(args: argparse.Namespace, settings: Settings, config: Config) -> int:
@@ -272,6 +343,7 @@ COMMANDS = {
     "run": cmd_run,
     "dry-run": cmd_dry_run,
     "backfill": cmd_backfill,
+    "reevaluate": cmd_reevaluate,
     "test-email": cmd_test_email,
 }
 

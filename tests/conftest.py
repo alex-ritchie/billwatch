@@ -141,3 +141,22 @@ def make_bill(
         history=hist,
         hearings=hearings or [],
     )
+
+
+@pytest.fixture
+def env_console(monkeypatch):
+    """Minimal environment for CLI tests that should never touch the network or a mailbox."""
+    for k in (
+        "LEGISCAN_API_KEY",
+        "SMTP_USERNAME",
+        "SMTP_APP_PASSWORD",
+        "SMTP_FROM",
+        "RECIPIENTS",
+        "BILLWATCH_MAILER",
+        "BUTTONDOWN_API_KEY",
+    ):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("BILLWATCH_MAILER", "console")
+    monkeypatch.setenv("RECIPIENTS", "friend@example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    return monkeypatch

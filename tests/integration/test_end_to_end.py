@@ -11,6 +11,7 @@ import sqlite3
 import pytest
 
 from billwatch.__main__ import EXIT_FAILED, EXIT_OK, main
+from billwatch.config import load_config
 from tests.integration.servers import LegiScanServer, SmtpServer
 
 pytestmark = pytest.mark.integration
@@ -75,10 +76,12 @@ def test_full_daily_cycle(env, legiscan, smtp, tmp_path, config_path, day1_dir, 
     assert "HB101" in html and "HB600" not in html
     assert "NEW BILLS (3)" in text and "COMMITTEE WATCH (1)" in text
     assert "https://mgaleg.maryland.gov" in html
-    # LegiScan traffic: sessions + masterlist + 3 searches + 7 details, key sent on each
+    # LegiScan traffic: sessions + masterlist + one search per configured query + 7 details
+    n_searches = len(load_config(config_path).feed("md-substance-use").searches)
+    fixed = 2 + n_searches
     ops = [r["op"] for r in legiscan.requests]
     assert ops.count("getSessionList") == 1 and ops.count("getMasterListRaw") == 1
-    assert ops.count("getSearchRaw") == 3 and ops.count("getBill") == 7
+    assert ops.count("getSearchRaw") == n_searches and ops.count("getBill") == 7
     assert all(r["key"] == legiscan.api_key for r in legiscan.requests)
     assert legiscan.requests[1] == {"key": "test-key", "op": "getMasterListRaw", "id": "2200"}
     # log hygiene
@@ -90,14 +93,14 @@ def test_full_daily_cycle(env, legiscan, smtp, tmp_path, config_path, day1_dir, 
     assert con.execute("SELECT COUNT(*) FROM bills WHERE tracked=1").fetchone()[0] == 3
     assert con.execute("SELECT COUNT(*) FROM events WHERE sent=0").fetchone()[0] == 0
     row = con.execute("SELECT new_bills, hearings, watch, sent, queries FROM sent_log").fetchone()
-    assert row == (3, 1, 1, 1, 12)
+    assert row == (3, 1, 1, 1, fixed + 7)
     con.close()
 
-    # ---- day 1 again: nothing changed → no email, only 5 queries ------------
+    # ---- day 1 again: nothing changed → no email, only the fixed queries ----
     n_before = len(legiscan.requests)
     assert _run("run", config_path, db, "--today", "2026-02-02") == EXIT_OK
     assert len(smtp.messages) == 1
-    assert len(legiscan.requests) - n_before == 5
+    assert len(legiscan.requests) - n_before == fixed
 
     # ---- day 2: switch the server to the day-2 recording --------------------
     legiscan.fixture_dir = day2_dir

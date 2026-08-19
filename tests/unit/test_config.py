@@ -17,7 +17,7 @@ def test_load_repo_config(config_path):
     feed = cfg.feed("md-substance-use")
     assert feed.state == "MD"
     assert "naloxone" in feed.keywords
-    assert feed.searches == ["overdose", "opioid", "harm reduction"]
+    assert "harm reduction" not in feed.searches and feed.searches[:2] == ["overdose", "opioid"]
     assert "Finance" in feed.watch_committees
     assert feed.recipients_env == "RECIPIENTS"
     assert cfg.settings.hearing_lookahead_days == 14

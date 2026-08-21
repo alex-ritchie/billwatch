@@ -31,7 +31,11 @@ keywords = [
   "harm reduction", "controlled dangerous substance", "buprenorphine",
   "methadone", "substance use", "substance abuse", "drug treatment",
   "recovery residence", "syringe", "prescription drug monitoring",
-  "kratom", "suboxone", "subutex", "naltrexone", "vivitrol"
+  "kratom", "suboxone", "subutex", "naltrexone", "vivitrol",
+  "medication-assisted treatment",
+  # SUD treatment in corrections: catches the Monica Cooper Prerelease Act family
+  # without pulling in general reentry/benefits bills.
+  "prerelease services",
 ]
 
 # Secondary net: LegiScan full-text search queries (catches bills whose
@@ -39,7 +43,7 @@ keywords = [
 # NOTE: quote multi-word phrases ('"harm reduction"'). Unquoted, LegiScan matches the
 # words independently — bare `harm reduction` returned 22 bills, quoted returned 3.
 # After changing this list run `billwatch reevaluate --dry-run` to preview the effect.
-searches = ["overdose", "opioid", '"harm reduction"', '"substance use disorder"']
+searches = ["overdose", "opioid", '"harm reduction"', '"medication-assisted treatment"']   # '"substance use disorder"' removed: matched too many tangential health-insurance/Medicaid bills
 
 # Tertiary signal (optional): flag anything referred to these committees
 # for manual review in a separate digest section, even if no keyword hit.

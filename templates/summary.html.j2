@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ subject }}</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#18181b;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f4f5;">
+<tr><td align="center" style="padding:24px 12px;">
+<table role="presentation" width="640" cellspacing="0" cellpadding="0" style="max-width:640px;width:100%;background:#ffffff;border-radius:8px;border:1px solid #e4e4e7;">
+<tr><td style="padding:24px 28px 8px 28px;">
+  <h1 style="margin:0 0 4px 0;font-size:20px;">{{ feed_title }}</h1>
+  <p style="margin:0 0 2px 0;font-size:15px;color:#3f3f46;"><strong>{% if session_name %}{{ session_name }} — {% endif %}Session summary</strong></p>
+  <p style="margin:0;color:#52525b;font-size:13px;">{{ bill_count }} bill{{ 's' if bill_count != 1 }} tracked · {{ counts_line }} · generated {{ generated }}</p>
+</td></tr>
+
+{% if is_empty %}
+<tr><td style="padding:16px 28px 24px 28px;">
+  <p style="margin:0;font-size:15px;">No bills matched this feed's filters this session.</p>
+</td></tr>
+{% endif %}
+
+{% macro bill_links(b) -%}
+  <a href="{{ b.url }}" style="color:#2563eb;">LegiScan</a>
+  {%- if b.state_url %} · <a href="{{ b.state_url }}" style="color:#2563eb;">{{ state_site_label }}</a>{% endif %}
+{%- endmacro %}
+
+{% for section in sections %}
+<tr><td style="padding:16px 28px 0 28px;">
+  <h2 style="margin:0 0 4px 0;font-size:16px;border-bottom:2px solid #e4e4e7;padding-bottom:4px;">{{ section.emoji }} {{ section.heading }} ({{ section.entries|length }})</h2>
+  {% if section.subtitle %}<p style="margin:0 0 6px 0;font-size:12px;color:#71717a;">{{ section.subtitle }}</p>{% endif %}
+  {% for e in section.entries %}{% set b = e.primary %}
+  <div style="padding:10px 0;border-bottom:1px solid #f0f0f2;">
+    <div style="font-size:15px;"><strong>{{ e.numbers }}</strong>{% if e.is_pair %} <span style="font-size:11px;color:#71717a;">(cross-filed)</span>{% endif %} — {{ b.title }}</div>
+    {% if b.synopsis %}<div style="font-size:13px;color:#3f3f46;margin-top:4px;">{{ b.synopsis|truncate(300) }}</div>{% endif %}
+    {% for x in e.bills %}
+    <div style="font-size:12px;color:#52525b;margin-top:5px;">
+      {% if e.is_pair %}<strong>{{ x.number }}</strong> · {% endif -%}
+      {%- if x.last_action %}{{ x.last_action }}{% if x.last_action_date %} ({{ x.last_action_date }}){% endif %}{% else %}{{ x.status_label }}{% if x.status_date %} ({{ x.status_date }}){% endif %}{% endif %}
+      {% if e.category == 'stalled' and x.committee %} · Last committee: {{ x.committee }}{% endif %}
+      · {{ bill_links(x) }}
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</td></tr>
+{% endfor %}
+
+<tr><td style="padding:20px 28px 24px 28px;">
+  <p style="margin:0;font-size:11px;color:#a1a1aa;line-height:1.5;">
+    Data from <a href="https://legiscan.com/" style="color:#a1a1aa;">LegiScan</a>.
+    This is a one-time session summary from billwatch; during the legislative session it sends a daily digest of new bills, status changes, and upcoming hearings.
+    {% if unsubscribe_note %}<br>{{ unsubscribe_note }}{% endif %}
+  </p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>

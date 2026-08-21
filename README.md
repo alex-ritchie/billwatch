@@ -102,7 +102,8 @@ uv run billwatch test-email --to you@example.com
 uv run billwatch run
 ```
 
-Commands: `run` · `dry-run` · `backfill` · `reevaluate` · `fetch-texts` · `test-email`. Global flags:
+Commands: `run` · `dry-run` · `backfill` · `reevaluate` · `fetch-texts` · `summary` ·
+`test-email`. Global flags:
 `--env-file`, `-v`. Per-command: `--config`, `--db`, `--feed NAME` (repeatable),
 `--today YYYY-MM-DD`, `--fixtures DIR`, `--max-queries N` (override the per-run query cap;
 `0` = unlimited). Set `BILLWATCH_MAILER=console` to print digests instead of sending.
@@ -128,6 +129,21 @@ adopted, and companions of bills that stop matching are pruned with them. `--no-
 adds/promotes and never removes. `--refetch` re-pulls every tracked bill's detail first
 (useful after upgrades). Tip: **quote multi-word search phrases** (`'"harm reduction"'`) —
 LegiScan's full-text search matches unquoted words independently.
+
+### End-of-session summary
+
+`billwatch summary` builds a one-shot recap of **every tracked bill in the session**, grouped
+by outcome — ✅ Became law · 🚫 Vetoed · 📬 Passed the legislature · 🛑 Did not advance — with
+cross-filed pairs shown together and each chamber's final action. Useful after sine die, or
+as a sample to show a prospective subscriber what the feed covers.
+
+```bash
+uv run billwatch summary                                # render to out/*.html,.txt (no email)
+uv run billwatch summary --send                         # email it to $RECIPIENTS
+uv run billwatch summary --send --to friend@example.com # one-off send, list untouched
+```
+
+Reads a copy of the DB and sends nothing to the sent-log — it never affects the daily digest.
 
 ### Bill texts
 

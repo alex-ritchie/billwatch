@@ -284,15 +284,70 @@ def render_text(digest: Digest, template_dir: Path = TEMPLATE_DIR) -> str:
     return "\n".join(out).strip() + "\n"
 
 
-def build_email(digest: Digest, sender: str, *, template_dir: Path = TEMPLATE_DIR) -> EmailMessage:
+def _make_email(subject: str, sender: str, feed_name: str, text: str, html: str) -> EmailMessage:
     """multipart/alternative message. Recipients are NOT set here (BCC at send time)."""
     msg = EmailMessage()
-    msg["Subject"] = digest.subject
+    msg["Subject"] = subject
     msg["From"] = sender
     msg["To"] = sender  # visible To is the sender; real recipients go as BCC envelope only
     msg["Date"] = formatdate(localtime=False)
     msg["Message-ID"] = make_msgid(domain="billwatch")
-    msg["X-Billwatch-Feed"] = digest.feed.name
-    msg.set_content(render_text(digest, template_dir))
-    msg.add_alternative(render_html(digest, template_dir), subtype="html")
+    msg["X-Billwatch-Feed"] = feed_name
+    msg.set_content(text)
+    msg.add_alternative(html, subtype="html")
     return msg
+
+
+def build_email(digest: Digest, sender: str, *, template_dir: Path = TEMPLATE_DIR) -> EmailMessage:
+    return _make_email(
+        digest.subject,
+        sender,
+        digest.feed.name,
+        render_text(digest, template_dir),
+        render_html(digest, template_dir),
+    )
+
+
+def _summary_context(summary) -> dict:
+    return {
+        "subject": summary.subject,
+        "feed_title": summary.feed.display_title,
+        "session_name": summary.session_name,
+        "generated": summary.generated,
+        "bill_count": summary.bill_count,
+        "counts_line": summary.counts_line,
+        "sections": summary.sections,
+        "is_empty": summary.is_empty,
+        "unsubscribe_note": summary.unsubscribe_note,
+        "state_site_label": STATE_SITE_LABELS.get(summary.feed.state, "State page"),
+    }
+
+
+def render_summary_html(summary, template_dir: Path = TEMPLATE_DIR) -> str:
+    return _env(template_dir).get_template("summary.html.j2").render(**_summary_context(summary))
+
+
+def render_summary_text(summary, template_dir: Path = TEMPLATE_DIR) -> str:
+    env = _env(template_dir)
+    env.autoescape = False
+    text = env.get_template("summary.txt.j2").render(**_summary_context(summary))
+    lines, out, blank = text.splitlines(), [], 0
+    for line in lines:
+        if line.strip():
+            blank = 0
+            out.append(line.rstrip())
+        else:
+            blank += 1
+            if blank <= 1:
+                out.append("")
+    return "\n".join(out).strip() + "\n"
+
+
+def build_summary_email(summary, sender: str, *, template_dir: Path = TEMPLATE_DIR) -> EmailMessage:
+    return _make_email(
+        summary.subject,
+        sender,
+        summary.feed.name,
+        render_summary_text(summary, template_dir),
+        render_summary_html(summary, template_dir),
+    )

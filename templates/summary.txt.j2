@@ -1,0 +1,24 @@
+{{ feed_title }}
+{% if session_name %}{{ session_name }} — {% endif %}SESSION SUMMARY
+{{ bill_count }} bill{{ 's' if bill_count != 1 }} tracked · {{ counts_line }} · generated {{ generated }}
+{% if is_empty %}
+No bills matched this feed's filters this session.
+{% endif %}
+{% for section in sections %}
+{{ section.heading|upper }} ({{ section.entries|length }})
+{{ '=' * 60 }}
+{% if section.subtitle %}({{ section.subtitle }})
+{% endif %}
+{% for e in section.entries %}{% set b = e.primary %}
+* {{ e.numbers }}{% if e.is_pair %} (cross-filed){% endif %} — {{ b.title }}
+{% if b.synopsis %}  {{ b.synopsis|truncate(240) }}
+{% endif %}{% for x in e.bills %}  {% if e.is_pair %}{{ x.number }}: {% endif %}{% if x.last_action %}{{ x.last_action }}{% if x.last_action_date %} ({{ x.last_action_date }}){% endif %}{% else %}{{ x.status_label }}{% if x.status_date %} ({{ x.status_date }}){% endif %}{% endif %}{% if e.category == 'stalled' and x.committee %} · Last committee: {{ x.committee }}{% endif %}
+  {{ x.url }}{% if x.state_url %}
+  {{ x.state_url }}{% endif %}
+{% endfor %}{% endfor %}{% endfor %}
+--
+Data from LegiScan (https://legiscan.com/).
+This is a one-time session summary from billwatch; during the legislative session it
+sends a daily digest of new bills, status changes, and upcoming hearings.
+{% if unsubscribe_note %}{{ unsubscribe_note }}
+{% endif %}

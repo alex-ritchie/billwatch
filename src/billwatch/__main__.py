@@ -1,4 +1,4 @@
-"""billwatch CLI: run | dry-run | backfill | reevaluate | fetch-texts | test-email.
+"""billwatch CLI: run | dry-run | backfill | reevaluate | fetch-texts | summary | test-email.
 
 Exit codes: 0 ok, 1 usage/config error, 2 fetch or delivery failure (so GitHub
 Actions marks the run failed and emails you — free failure alerting).
@@ -139,6 +139,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the stored text of one bill (e.g. HB1109) and exit; no fetch",
     )
     sp_tx.add_argument("--stats", action="store_true", help="print text storage stats and exit")
+
+    sp_sum = sub.add_parser(
+        "summary",
+        help="end-of-session summary of all tracked bills, grouped by outcome",
+    )
+    common(sp_sum)
+    sp_sum.add_argument("--out", default="out", help="directory for rendered files (default: out)")
+    sp_sum.add_argument(
+        "--send", action="store_true", help="email the summary (default: render to --out only)"
+    )
+    sp_sum.add_argument(
+        "--to",
+        action="append",
+        dest="to",
+        metavar="ADDR",
+        help="override recipients for this send (repeatable)",
+    )
+    sp_sum.add_argument(
+        "--session-id",
+        type=int,
+        default=None,
+        help="restrict to one LegiScan session (default: all tracked bills)",
+    )
 
     sp_te = sub.add_parser("test-email", help="send a sample digest to verify SMTP settings")
     sp_te.add_argument("--config", default=DEFAULT_CONFIG)
@@ -395,6 +418,54 @@ def cmd_fetch_texts(args: argparse.Namespace, settings: Settings, config: Config
     return EXIT_OK
 
 
+def cmd_summary(args: argparse.Namespace, settings: Settings, config: Config) -> int:
+    from .digest import build_summary_email, render_summary_html, render_summary_text
+    from .summary import build_summary
+
+    today = args.today or date.today()
+    feeds = [config.feed(n) for n in args.feeds] if args.feeds else list(config.feeds.values())
+    rc = EXIT_OK
+    with _memory_copy(args.db) as store:
+        for feed in feeds:
+            summary = build_summary(store, config, feed, today, session_id=args.session_id)
+            if summary.bill_count == 0:
+                log.warning(
+                    "[%s] no tracked bills in the store%s — is the DB path right?",
+                    feed.name,
+                    f" for session {args.session_id}" if args.session_id else "",
+                )
+            log.info(
+                "[%s] summary: %d bill(s), %s", feed.name, summary.bill_count, summary.counts_line
+            )
+            if not args.send:
+                out_dir = Path(args.out)
+                out_dir.mkdir(parents=True, exist_ok=True)
+                stem = out_dir / f"{feed.name}-summary"
+                stem.with_suffix(".html").write_text(render_summary_html(summary), encoding="utf-8")
+                stem.with_suffix(".txt").write_text(render_summary_text(summary), encoding="utf-8")
+                log.info(
+                    "[%s] summary rendered: %s.{html,txt} (use --send to email it)", feed.name, stem
+                )
+                continue
+            recipients = list(args.to or []) or settings.recipients_for(feed)
+            if not recipients:
+                log.error(
+                    "[%s] no recipients: pass --to or set $%s", feed.name, feed.recipients_env
+                )
+                rc = EXIT_USAGE
+                continue
+            msg = build_summary_email(summary, settings.smtp_from or "billwatch@localhost")
+            mailer = make_mailer(settings)
+            mailer.send(msg, recipients)
+            log.info(
+                "[%s] session summary sent via %s to %d recipient(s)",
+                feed.name,
+                mailer.name,
+                len(recipients),
+            )
+    return rc
+
+
 def cmd_test_email(args: argparse.Namespace, settings: Settings, config: Config) -> int:
     feed = config.feed(args.feed) if args.feed else next(iter(config.feeds.values()))
     recipients = list(args.to or []) or settings.recipients_for(feed)
@@ -420,6 +491,7 @@ COMMANDS = {
     "backfill": cmd_backfill,
     "reevaluate": cmd_reevaluate,
     "fetch-texts": cmd_fetch_texts,
+    "summary": cmd_summary,
     "test-email": cmd_test_email,
 }
 
